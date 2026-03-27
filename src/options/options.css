@@ -1,0 +1,65 @@
+body {
+  margin: 0;
+  font-family: Inter, Arial, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.container {
+  max-width: 760px;
+  margin: 24px auto;
+  padding: 0 16px;
+}
+
+.panel {
+  background: #1e293b;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+form {
+  display: grid;
+  gap: 12px;
+}
+
+label {
+  display: grid;
+  gap: 4px;
+  font-weight: 600;
+}
+
+input,
+textarea,
+button {
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #0b1220;
+  color: #e2e8f0;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+button {
+  background: #22c55e;
+  color: #052e16;
+  border: none;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+#statusText {
+  margin: 0;
+  color: #93c5fd;
+}
+
+code {
+  background: #0b1220;
+  padding: 2px 4px;
+  border-radius: 4px;
+}

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WA Bulk Messenger Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>WA Bulk Messenger - Settings</h1>
+      <form id="settingsForm" class="panel">
+        <label>Min Delay (ms)
+          <input id="minDelayMs" type="number" min="500" required />
+        </label>
+        <label>Max Delay (ms)
+          <input id="maxDelayMs" type="number" min="500" required />
+        </label>
+        <label>Max Messages Per Session
+          <input id="maxMessagesPerSession" type="number" min="1" required />
+        </label>
+        <label>Max Retries
+          <input id="maxRetries" type="number" min="0" required />
+        </label>
+        <label class="checkbox-row">
+          <input id="randomDelayEnabled" type="checkbox" /> Enable random delay
+        </label>
+        <label class="checkbox-row">
+          <input id="attachmentSendingEnabled" type="checkbox" /> Enable attachment sending
+        </label>
+        <label>Default Message Template
+          <textarea id="defaultTemplate" rows="5"></textarea>
+        </label>
+        <button type="submit">Save Settings</button>
+        <p id="statusText"></p>
+      </form>
+
+      <section class="panel">
+        <h2>Template Variables</h2>
+        <ul>
+          <li><code>{{sr_no}}</code> / <code>{{sr no}}</code></li>
+          <li><code>{{number}}</code> / <code>{{mobile_number}}</code></li>
+          <li>Any XLS column header, e.g. <code>{{customer_name}}</code></li>
+        </ul>
+      </section>
+    </main>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
