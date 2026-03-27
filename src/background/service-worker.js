@@ -71,6 +71,21 @@ function getPerMessageDelay() {
   return randomBetween(minDelayMs, maxDelayMs);
 }
 
+function transformQueueRows(rows = []) {
+  return rows.slice(0, state.settings.maxMessagesPerSession).map((row, index) => {
+    const effectiveTemplate = row.messageTemplate || state.settings.defaultTemplate;
+    return {
+      ...row,
+      srNo: row.srNo || index + 1,
+      rowId: row.id || `row-${index + 1}`,
+      mobileNumber: normalizePhone(row.mobileNumber || ''),
+      messageTemplate: effectiveTemplate,
+      renderedMessage: applyTemplate(effectiveTemplate, row),
+      attachmentUrl: row.attachmentUrl || '',
+      _retryCount: 0
+    };
+  });
+}
 
 async function startCampaign(rows = [], incomingSettings = {}) {
   state.settings = sanitizeSettings({ ...state.settings, ...incomingSettings });
@@ -93,20 +108,6 @@ async function startCampaign(rows = [], incomingSettings = {}) {
   processQueue();
   return getProgress();
 }
-function transformQueueRows(rows = []) {
-  return rows.slice(0, state.settings.maxMessagesPerSession).map((row, index) => {
-    const effectiveTemplate = row.messageTemplate || state.settings.defaultTemplate;
-    return {
-      ...row,
-      srNo: row.srNo || index + 1,
-      mobileNumber: normalizePhone(row.mobileNumber || ''),
-      messageTemplate: effectiveTemplate,
-      renderedMessage: applyTemplate(effectiveTemplate, row),
-      attachmentUrl: row.attachmentUrl || '',
-      _retryCount: 0
-    };
-  });
-}
 
 async function processQueue() {
   if (!state.running) return;
@@ -122,6 +123,7 @@ async function processQueue() {
       type: 'SEND_MESSAGE',
       data: {
         srNo: item.srNo,
+        rowId: item.rowId,
         phone: item.mobileNumber,
         message: item.renderedMessage,
         attachmentUrl: state.settings.attachmentSendingEnabled ? item.attachmentUrl : '',
@@ -131,7 +133,7 @@ async function processQueue() {
     };
 
     try {
-      console.log('[WA Bulk] Sending row', state.currentIndex + 1, payload.data);
+      console.log('[WA CRM] Sending row', state.currentIndex + 1, payload.data);
       const result = await sendToContent(payload);
       if (!result?.ok) throw new Error(result?.error || 'Unknown send error');
 
@@ -141,6 +143,7 @@ async function processQueue() {
       await broadcastProgress({
         status: 'success',
         index: state.currentIndex,
+        rowId: item.rowId,
         phone: item.mobileNumber,
         detail: result.mode || 'text'
       });
@@ -151,6 +154,7 @@ async function processQueue() {
         await broadcastProgress({
           status: 'retrying',
           index: state.currentIndex + 1,
+          rowId: item.rowId,
           retry: item._retryCount,
           phone: item.mobileNumber,
           reason: error.message
@@ -165,6 +169,7 @@ async function processQueue() {
       await broadcastProgress({
         status: 'failed',
         index: state.currentIndex,
+        rowId: item.rowId,
         phone: item.mobileNumber,
         reason: error.message
       });
@@ -194,6 +199,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       case 'GET_PROGRESS': {
         sendResponse({ ok: true, progress: getProgress() });
+        break;
+      }
+      case 'GET_CHAT_SNAPSHOT': {
+        const result = await sendToContent({ type: 'GET_CHAT_SNAPSHOT' });
+        sendResponse(result);
+        break;
+      }
+      case 'SCRAPE_CONTACTS': {
+        const result = await sendToContent({ type: 'SCRAPE_CONTACTS', groupName: message.groupName || '' });
+        sendResponse(result);
+        break;
+      }
+      case 'OPEN_CHAT': {
+        const result = await sendToContent({ type: 'OPEN_CHAT', query: message.query || message.phone || '' });
+        sendResponse(result);
         break;
       }
       case 'START_CAMPAIGN': {
@@ -234,16 +254,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       }
-      case 'SCRAPE_CONTACTS': {
-        const contacts = await sendToContent({ type: 'SCRAPE_CONTACTS' });
-        sendResponse({ ok: true, contacts });
-        break;
-      }
       default:
         sendResponse({ ok: false, error: 'Unknown message type' });
     }
   })().catch((error) => {
-    console.error('[WA Bulk] Background error', error);
+    console.error('[WA CRM] Background error', error);
     sendResponse({ ok: false, error: error.message });
   });
 

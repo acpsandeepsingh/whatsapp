@@ -6,7 +6,7 @@ body {
 }
 
 .container {
-  max-width: 1250px;
+  max-width: 1320px;
   margin: 20px auto;
   padding: 0 16px 30px;
 }
@@ -32,15 +32,35 @@ body {
   margin-top: 12px;
 }
 
-.button-row {
+.controls-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 14px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.filter-row {
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.filter-row label {
+  width: 130px;
+  color: #cbd5e1;
 }
 
 button,
 input,
-textarea {
+textarea,
+select {
   padding: 10px;
   border-radius: 8px;
   border: 1px solid #334155;
@@ -48,7 +68,15 @@ textarea {
   color: #e2e8f0;
 }
 
+input,
+textarea,
+select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 button {
+  width: auto;
   background: #22c55e;
   color: #052e16;
   border: none;
@@ -66,6 +94,26 @@ button.danger {
   color: #fff;
 }
 
+.button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.template-label {
+  grid-column: span 2;
+}
+
 progress {
   width: 100%;
 }
@@ -77,7 +125,7 @@ progress {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 980px;
+  min-width: 1100px;
 }
 
 th,
@@ -93,7 +141,6 @@ td[contenteditable='true'] {
   min-width: 140px;
 }
 
-tr.status-sent td:last-child,
 .status-pill.sent {
   color: #22c55e;
 }
@@ -126,4 +173,11 @@ pre {
 #statusText {
   margin: 10px 0 0;
   color: #93c5fd;
+}
+
+@media (max-width: 1050px) {
+  .controls-grid,
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
 }

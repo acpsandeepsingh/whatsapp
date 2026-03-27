@@ -1,93 +1,131 @@
-# WA Bulk Messenger Pro (Manifest V3)
+# WA CRM Automation Extension (Manifest V3)
 
-A Chrome extension for WhatsApp Web automation with a fixed popup, full options dashboard, XLS/XLSX import, row-level personalization, queue controls, and live status tracking.
+A production-oriented WhatsApp Web automation Chrome extension with DOM-only sending (no tab navigation/reload), contact filters, group participant scraping, XLS import, template variables, and campaign queue controls.
 
-## Load Extension (Load Unpacked)
+## Key Stability Fix (Reload Issue)
 
-1. Open Chrome and go to `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select this repository root folder (`/workspace/whatsapp`).
-5. Open `https://web.whatsapp.com/` and ensure you are logged in.
+This build **does not use `wa.me` or `web.whatsapp.com/send?phone=...` navigation** during automation.
 
-## Popup (Fixed)
+Instead, every send action stays inside the same WhatsApp Web tab and uses DOM steps only:
 
-Clicking the extension icon now opens a popup with:
+1. Use sidebar search box.
+2. Open chat from search results.
+3. Fill message input.
+4. Upload/send attachment if provided.
+5. Send and continue queue.
 
-- **Open Dashboard** (opens options page in a full tab)
-- **Start Automation** (runs campaign from saved dashboard rows)
-- **Check Status** (fetches current campaign state)
+This prevents the previous repeated reload/navigation bug during bulk sending.
 
-## Open Dashboard (Options Page)
+## Features Implemented
 
-Use popup → **Open Dashboard**, or Chrome extension details → **Extension options**.
+### 1) Contact Filter Engine
 
-Dashboard includes:
+Primary filter:
+- All Contacts
+- All Chats
+- Unread Chats
+- Read Chats
+- From Specific Group
+- From Specific Label
+- From Specific Country
 
-- Editable table with columns:
+Secondary filter is dynamic:
+- Groups list from sidebar snapshot
+- Labels (if available)
+- Country codes inferred from detected phone numbers
+
+Use **Sync Chats** first, then **Apply Filter to Table**.
+
+### 2) Group Auto Scraper
+
+- Detect group names from WhatsApp sidebar data.
+- Select a group from filter.
+- Click **Scrape Group Members**:
+  - Opens group chat via search
+  - Opens group info panel
+  - Scrolls participant list
+  - Extracts name + phone
+  - Deduplicates by phone
+
+### 3) XLS + Editable Table System
+
+- Import `.xls/.xlsx` with SheetJS.
+- Columns:
   - Sr No
   - Mobile Number
-  - Message Text
-  - Attachment URL (local or remote)
-  - Status
-- **Add Row** button for manual entry
-- XLS/XLSX import via SheetJS
-- Inline editing for number/message/attachment URL
-- Local file attach per row (stored as data URL)
-- Save rows in `chrome.storage.local`
+  - Name
+  - Message Template
+  - Attachment URL
+- Inline editable cells.
+- Add row manually.
+- Per-row local file attach (stored as data URL).
+- Phone validation with status badges.
 
-## XLS Import
+### 4) Template Engine
 
-1. In dashboard, choose an `.xls/.xlsx` file.
-2. Click **Import XLS/XLSX**.
-3. Table auto-fills from rows.
-4. Validation marks bad phone numbers.
+Supports:
+- `{{sr_no}}`
+- `{{mobile}}`
+- `{{name}}`
 
-Supported headers (case-insensitive aliases):
+Also supports normalized XLS column keys (snake_case).
 
-- `Sr No`
-- `Mobile Number`
-- `Message Template`
-- `Attachment URL`
+### 5) Stable Auto-Send Engine
 
-## Template Variables
+Queue worker in service worker + DOM automation in content script:
+- opens chat by sidebar search (no navigation)
+- injects personalized message
+- fetches remote attachment URL -> Blob -> File -> file input upload
+- sends message
+- random delay between min/max settings (3s–10s default)
 
-Example template:
+### 6) Queue + Controls
 
-```text
-Hello {{mobile}}, your serial is {{sr_no}}
-```
+- Sequential queue
+- Start / Pause / Resume / Stop
+- Retry failed rows (max retries configurable)
+- Progress tracking (Sent / Pending / Failed / Retries)
 
-Also supports:
+### 7) Options Dashboard
 
-- `{{mobile_number}}`
-- `{{number}}`
-- Any XLS column key normalized to snake_case (from raw row data)
+- Full options page for table + import + controls + settings
+- Settings:
+  - min delay
+  - max delay
+  - random delay toggle
+  - max messages per session
+  - max retries
+  - attachment enable/disable
+  - default template
 
-## Run Auto Sending
+## Setup (Load Unpacked)
 
-1. Keep WhatsApp Web open (`https://web.whatsapp.com/*`).
-2. Fill rows manually or import XLS/XLSX.
-3. Click **Start Sending**.
-4. Use controls:
-   - Start
-   - Pause
-   - Resume
-   - Stop
-5. Observe live progress + latest log in dashboard.
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select this repo root (`/workspace/whatsapp`).
+5. Open `https://web.whatsapp.com/` and log in.
 
-## Queue / Automation Notes
+## How to Use
 
-- Sequential one-by-one processing
-- Delay range defaults to 3s–10s (configurable in settings storage)
-- Attachment pipeline:
-  - Remote URL: fetch → Blob → File → upload/send
-  - Local attachment: file picker → data URL → fetch Blob in content script
-- Status updates are pushed from service worker to popup/options via runtime messaging
+1. Open extension popup -> **Open Dashboard**.
+2. Optional: click **Sync Chats**.
+3. Pick filter + secondary value (if required).
+4. Click **Apply Filter to Table** or import XLS.
+5. Adjust settings.
+6. Click **Start**.
+7. Use Pause/Resume/Stop as needed.
+
+## Safe Automation Notes
+
+- Keep one WhatsApp Web tab open and logged in.
+- Do not manually navigate away while queue is running.
+- Use conservative delays to reduce risk.
+- Verify message templates and attachments before large runs.
 
 ## Troubleshooting
 
-- **Popup not showing**: reload extension in `chrome://extensions`.
-- **No send starts**: ensure WhatsApp Web tab is open and logged in.
-- **Attachment issue**: remote URL may block fetch; extension falls back to text + URL.
-- **No saved rows for popup start**: open dashboard and click **Save Rows** first.
+- **"Open WhatsApp Web in a tab first"**: open `https://web.whatsapp.com/`.
+- **No chat sync data**: WhatsApp may still be loading; wait and click Sync again.
+- **Attachment fallback**: if URL blocks download/CORS, extension sends text + attachment URL fallback.
+- **Group scrape empty**: participant details vary by account privacy and WhatsApp UI changes.
