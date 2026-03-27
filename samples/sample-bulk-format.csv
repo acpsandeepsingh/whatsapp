@@ -1,0 +1,4 @@
+Sr No,Mobile Number,Message Template,Attachment URL
+1,15551234567,"Hello {{Mobile Number}}, this is row {{Sr No}} test.",https://example.com/files/brochure.pdf
+2,15557654321,"Hi! Your personalized campaign message is ready.",https://example.com/files/image.jpg
+3,15559876543,"This one will send text even with empty attachment url.",
