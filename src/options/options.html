@@ -3,30 +3,76 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WA Bulk Messenger Dashboard</title>
+    <title>WA CRM Dashboard</title>
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
     <main class="container">
-      <header class="header-row">
-        <h1>WA Bulk Messenger Dashboard</h1>
+      <header class="header-row panel">
+        <h1>WA CRM Automation Dashboard</h1>
         <div class="header-actions">
           <input id="xlsInput" type="file" accept=".xls,.xlsx" />
           <button id="importBtn">Import XLS/XLSX</button>
           <button id="addRowBtn" class="secondary">Add Row</button>
+          <button id="saveRowsBtn" class="secondary">Save Rows</button>
         </div>
       </header>
 
-      <section class="panel controls">
-        <div class="button-row">
-          <button id="startBtn">Start Sending</button>
-          <button id="pauseBtn" class="secondary">Pause</button>
-          <button id="resumeBtn" class="secondary">Resume</button>
-          <button id="stopBtn" class="danger">Stop</button>
-          <button id="checkStatusBtn" class="secondary">Check Status</button>
-          <button id="saveRowsBtn" class="secondary">Save Rows</button>
+      <section class="panel controls-grid">
+        <div>
+          <h2>Contact Filter Engine</h2>
+          <div class="filter-row">
+            <label for="primaryFilter">Primary Filter</label>
+            <select id="primaryFilter">
+              <option value="all_contacts">All Contacts</option>
+              <option value="all_chats">All Chats</option>
+              <option value="unread_chats">Unread Chats</option>
+              <option value="read_chats">Read Chats</option>
+              <option value="specific_group">From Specific Group</option>
+              <option value="specific_label">From Specific Label</option>
+              <option value="specific_country">From Specific Country</option>
+            </select>
+          </div>
+          <div class="filter-row">
+            <label for="secondaryFilter">Secondary Filter</label>
+            <select id="secondaryFilter" disabled>
+              <option value="">Not required</option>
+            </select>
+          </div>
+          <div class="button-row">
+            <button id="syncChatsBtn" class="secondary">Sync Chats</button>
+            <button id="applyFilterBtn" class="secondary">Apply Filter to Table</button>
+            <button id="scrapeGroupBtn" class="secondary">Scrape Group Members</button>
+          </div>
         </div>
-        <p id="statusText">Idle</p>
+
+        <div>
+          <h2>Campaign Controls</h2>
+          <div class="button-row">
+            <button id="startBtn">Start</button>
+            <button id="pauseBtn" class="secondary">Pause</button>
+            <button id="resumeBtn" class="secondary">Resume</button>
+            <button id="stopBtn" class="danger">Stop</button>
+            <button id="checkStatusBtn" class="secondary">Refresh Status</button>
+          </div>
+          <p id="statusText">Idle</p>
+        </div>
+      </section>
+
+      <section class="panel settings-grid">
+        <h2>Automation Settings</h2>
+        <label>Min delay (ms) <input id="minDelayMs" type="number" min="500" step="100" /></label>
+        <label>Max delay (ms) <input id="maxDelayMs" type="number" min="500" step="100" /></label>
+        <label>Max messages/session <input id="maxMessagesPerSession" type="number" min="1" step="1" /></label>
+        <label>Max retries <input id="maxRetries" type="number" min="0" step="1" /></label>
+        <label class="checkbox-row"><input id="randomDelayEnabled" type="checkbox" /> Random delay enabled</label>
+        <label class="checkbox-row"><input id="attachmentSendingEnabled" type="checkbox" /> Send attachments</label>
+        <label class="template-label">Default template
+          <textarea id="defaultTemplate" rows="2" placeholder="Hello {{name}}, mobile {{mobile}}, sr {{sr_no}}"></textarea>
+        </label>
+        <div class="button-row">
+          <button id="saveSettingsBtn" class="secondary">Save Settings</button>
+        </div>
       </section>
 
       <section class="panel">
@@ -37,8 +83,8 @@
       </section>
 
       <section class="panel">
-        <h2>Message Template Preview</h2>
-        <p class="muted">Use variables like <code>{{mobile}}</code>, <code>{{mobile_number}}</code>, <code>{{sr_no}}</code>.</p>
+        <h2>Template Variables</h2>
+        <p class="muted">Supported: <code>{{sr_no}}</code>, <code>{{mobile}}</code>, <code>{{name}}</code>, and any XLS column normalized to snake_case.</p>
       </section>
 
       <section class="panel table-panel">
@@ -47,8 +93,9 @@
             <tr>
               <th>Sr No</th>
               <th>Mobile Number</th>
-              <th>Message Text</th>
-              <th>Attachment URL (local or remote)</th>
+              <th>Name</th>
+              <th>Message Template</th>
+              <th>Attachment URL</th>
               <th>Status</th>
               <th>Actions</th>
             </tr>

@@ -3,12 +3,15 @@ export function normalizePhone(value) {
 }
 
 function toTemplateContext(row = {}) {
+  const mobileValue = row.mobileNumber ?? row.mobile ?? row.number ?? row.phone ?? '';
   const base = {
     sr_no: row.srNo ?? row.sr_no ?? '',
     srno: row.srNo ?? row.sr_no ?? '',
-    number: row.mobileNumber ?? row.number ?? row.phone ?? '',
-    mobile_number: row.mobileNumber ?? row.number ?? row.phone ?? '',
-    phone: row.mobileNumber ?? row.number ?? row.phone ?? '',
+    number: mobileValue,
+    mobile_number: mobileValue,
+    mobile: mobileValue,
+    phone: mobileValue,
+    name: row.name ?? row.contactName ?? row.raw?.name ?? '',
     attachment_url: row.attachmentUrl ?? ''
   };
 

@@ -48,6 +48,7 @@ export async function parseWorkbook(file) {
     const row = normalizeHeaders(inputRow);
     const srNo = pickField(row, ['sr no', 'srno', 'serial no', 'serial']) || String(index + 1);
     const mobileNumber = pickField(row, ['mobile number', 'mobile', 'phone', 'number', 'whatsapp number']);
+    const name = pickField(row, ['name', 'contact name', 'full name']);
     const messageTemplate = pickField(row, ['message template', 'message', 'template']);
     const attachmentUrl = pickField(row, ['attachment url', 'attachment', 'file url', 'media url']);
 
@@ -59,6 +60,7 @@ export async function parseWorkbook(file) {
       id: `row-${index}-${Date.now()}`,
       srNo,
       mobileNumber,
+      name,
       messageTemplate,
       attachmentUrl,
       isValidPhone: isValidPhone(mobileNumber),
