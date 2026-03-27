@@ -9,14 +9,27 @@
   <body>
     <main class="app">
       <h1>WA Bulk Messenger</h1>
-      <p class="hint">Quick actions</p>
 
-      <button id="openDashboardBtn">Open Dashboard</button>
-      <button id="startAutomationBtn">Start Automation</button>
-      <button id="checkStatusBtn" class="secondary">Check Status</button>
+      <label for="primaryFilter">Contact Filter</label>
+      <select id="primaryFilter">
+        <option value="all_contacts">All Contacts</option>
+        <option value="all_chats">All Chats</option>
+        <option value="unread">Unread</option>
+        <option value="read">Read</option>
+        <option value="specific_group">Specific Group</option>
+        <option value="country">Country</option>
+      </select>
+
+      <label for="secondaryFilter">Secondary Filter</label>
+      <select id="secondaryFilter" disabled>
+        <option value="">Not required</option>
+      </select>
+
+      <button id="fetchContactsBtn">Fetch Contacts</button>
+      <button id="openDashboardBtn" class="secondary">Open Dashboard</button>
 
       <section class="status-card">
-        <p id="statusText">Status: Idle</p>
+        <p id="statusText">Idle</p>
         <pre id="latestLog">No recent activity.</pre>
       </section>
     </main>

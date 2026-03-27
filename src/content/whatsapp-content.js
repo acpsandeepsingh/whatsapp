@@ -1,3 +1,5 @@
+import { ACTIONS, getAction } from '../shared/actions.js';
+
 const SELECTORS = {
   appReady: ['#app'],
   chatSearchInputs: [
@@ -29,11 +31,7 @@ const SELECTORS = {
     'div[data-testid="group-participants"]',
     'div[role="dialog"] [tabindex="-1"]'
   ],
-  participantRows: [
-    '[aria-label*="Participants"] [role="listitem"]',
-    'div[data-testid="cell-frame-container"]',
-    '[role="listitem"]'
-  ],
+  participantRows: ['[aria-label*="Participants"] [role="listitem"]', 'div[data-testid="cell-frame-container"]', '[role="listitem"]'],
   closePanelButtons: ['button[aria-label="Back"]', 'span[data-icon="back"]', 'button[title="Back"]']
 };
 
@@ -148,6 +146,20 @@ async function gatherSidebarData() {
   const countryCodes = [...new Set(chats.map((c) => c.countryCode).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
   return { chats, groups, labels, countryCodes };
+}
+
+function filterChats(snapshot = {}, filter = {}) {
+  const chats = Array.isArray(snapshot.chats) ? snapshot.chats : [];
+  const primary = filter.primary || 'all_contacts';
+  const secondary = filter.secondary || '';
+
+  if (primary === 'all_contacts' || primary === 'all_chats') return chats;
+  if (primary === 'unread') return chats.filter((chat) => Number(chat.unreadCount) > 0);
+  if (primary === 'read') return chats.filter((chat) => Number(chat.unreadCount) === 0);
+  if (primary === 'specific_group') return chats.filter((chat) => chat.isGroup && chat.name === secondary);
+  if (primary === 'country') return chats.filter((chat) => chat.countryCode === secondary);
+
+  return chats;
 }
 
 async function openChatBySearch(queryValue) {
@@ -332,56 +344,65 @@ async function sendSingleMessage({ srNo, phone, message, attachmentUrl, attachme
         await wait(700);
         await setMessageAndSend(message);
       }
-      return { ok: true, mode: 'attachment+text' };
+      return { success: true, mode: 'attachment+text' };
     } catch (error) {
       log('Attachment failed, using fallback', error.message);
       const fallbackText = [message, `Attachment: ${attachmentUrl}`].filter(Boolean).join('\n\n').trim();
       await setMessageAndSend(fallbackText);
-      return { ok: true, mode: 'text+attachment-url-fallback', warning: error.message };
+      return { success: true, mode: 'text+attachment-url-fallback', warning: error.message };
     }
   }
 
   await setMessageAndSend(message);
-  return { ok: true, mode: 'text' };
+  return { success: true, mode: 'text' };
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
-    switch (message.type) {
-      case 'PING':
-        sendResponse({ ok: true });
+    const action = getAction(message);
+    log('ACTION:', action, message);
+
+    switch (action) {
+      case ACTIONS.PING:
+        sendResponse({ success: true });
         break;
-      case 'GET_CHAT_SNAPSHOT': {
+      case ACTIONS.GET_CHAT_SNAPSHOT: {
         const snapshot = await gatherSidebarData();
-        sendResponse({ ok: true, ...snapshot });
+        sendResponse({ success: true, ...snapshot });
         break;
       }
-      case 'GET_GROUP_LIST': {
+      case ACTIONS.GET_GROUPS: {
         const snapshot = await gatherSidebarData();
-        sendResponse({ ok: true, groups: snapshot.groups });
+        sendResponse({ success: true, groups: snapshot.groups });
         break;
       }
-      case 'SCRAPE_CONTACTS': {
+      case ACTIONS.FETCH_CONTACTS: {
+        const snapshot = await gatherSidebarData();
+        const contacts = filterChats(snapshot, message.filter || {});
+        sendResponse({ success: true, data: contacts, snapshot });
+        break;
+      }
+      case ACTIONS.SCRAPE_GROUP: {
         const contacts = await scrapeGroupContacts(message.groupName || '');
-        sendResponse({ ok: true, contacts });
+        sendResponse({ success: true, data: contacts });
         break;
       }
-      case 'OPEN_CHAT': {
+      case ACTIONS.OPEN_CHAT: {
         await openChatBySearch(message.query || message.phone || '');
-        sendResponse({ ok: true });
+        sendResponse({ success: true });
         break;
       }
-      case 'SEND_MESSAGE': {
-        const result = await sendSingleMessage(message.data);
+      case ACTIONS.SEND_MESSAGE: {
+        const result = await sendSingleMessage(message.data || {});
         sendResponse(result);
         break;
       }
       default:
-        sendResponse({ ok: false, error: 'Unsupported content action' });
+        sendResponse({ success: false, error: `Unknown content action: ${action || 'undefined'}` });
     }
   })().catch((error) => {
     log('Handler error', error);
-    sendResponse({ ok: false, error: error.message });
+    sendResponse({ success: false, error: error.message });
   });
 
   return true;
