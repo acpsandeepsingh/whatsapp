@@ -1,4 +1,5 @@
-import { parseWorkbook } from '../services/xls-parser.js';
+import { parseWorkbook, validatePhone } from '../services/xls-parser.js';
+import { DEFAULT_SETTINGS } from '../services/settings.js';
 
 const ui = {
   xlsInput: document.getElementById('xlsInput'),
@@ -10,35 +11,79 @@ const ui = {
   progressText: document.getElementById('progressText'),
   progressBar: document.getElementById('progressBar'),
   latestLog: document.getElementById('latestLog'),
-  minDelay: document.getElementById('minDelay'),
-  maxDelay: document.getElementById('maxDelay'),
-  maxRetries: document.getElementById('maxRetries'),
+  rowsTableBody: document.getElementById('rowsTableBody'),
+  tableWrap: document.getElementById('tableWrap'),
+  previewHint: document.getElementById('previewHint'),
   scrapeBtn: document.getElementById('scrapeBtn'),
   downloadContacts: document.getElementById('downloadContacts')
 };
 
 let parsedRows = [];
+let settings = { ...DEFAULT_SETTINGS };
 
-function renderProgress(progress, latest = null) {
+function setHint(text, isError = false) {
+  ui.fileMeta.textContent = text;
+  ui.fileMeta.style.color = isError ? '#f87171' : '#94a3b8';
+}
+
+function renderRowsTable() {
+  ui.rowsTableBody.innerHTML = '';
+
+  parsedRows.forEach((row, index) => {
+    const tr = document.createElement('tr');
+    const valid = validatePhone(row.mobileNumber);
+
+    tr.innerHTML = `
+      <td>${row.srNo}</td>
+      <td>${row.mobileNumber}</td>
+      <td contenteditable="true" data-index="${index}" data-field="messageTemplate">${row.messageTemplate || ''}</td>
+      <td>${row.attachmentUrl || ''}</td>
+      <td class="${valid ? 'status-ok' : 'status-bad'}">${valid ? 'Yes' : 'No'}</td>
+    `;
+
+    ui.rowsTableBody.appendChild(tr);
+  });
+
+  ui.previewHint.classList.add('hidden');
+  ui.tableWrap.classList.remove('hidden');
+}
+
+function updateProgress(progress, latest = null) {
   const total = progress.total || 0;
-  const done = (progress.stats?.sent || 0) + (progress.stats?.failed || 0);
+  const sent = progress.stats?.sent || 0;
+  const failed = progress.stats?.failed || 0;
+  const pending = progress.stats?.pending || Math.max(total - (sent + failed), 0);
+  const done = sent + failed;
   const percent = total ? Math.round((done / total) * 100) : 0;
 
-  ui.progressBar.max = 100;
   ui.progressBar.value = percent;
-  ui.progressText.textContent = `Status: ${progress.running ? (progress.paused ? 'Paused' : 'Running') : 'Idle'} | ${done}/${total} | Sent: ${progress.stats?.sent || 0} | Failed: ${progress.stats?.failed || 0} | Retries: ${progress.stats?.retries || 0}`;
+  ui.progressText.textContent = `Status: ${progress.running ? (progress.paused ? 'Paused' : 'Running') : 'Idle'} | Sent ${sent} | Pending ${pending} | Failed ${failed}`;
 
   if (latest) {
     ui.latestLog.textContent = JSON.stringify(latest, null, 2);
   }
 }
 
-async function getProgress() {
-  const response = await chrome.runtime.sendMessage({ type: 'GET_PROGRESS' });
+async function loadSettings() {
+  const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
   if (response?.ok) {
-    renderProgress(response.progress);
+    settings = { ...DEFAULT_SETTINGS, ...response.settings };
   }
 }
+
+async function syncProgress() {
+  const response = await chrome.runtime.sendMessage({ type: 'GET_PROGRESS' });
+  if (response?.ok) updateProgress(response.progress);
+}
+
+ui.rowsTableBody.addEventListener('blur', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement) || target.dataset.field !== 'messageTemplate') return;
+
+  const index = Number(target.dataset.index);
+  if (Number.isNaN(index) || !parsedRows[index]) return;
+  parsedRows[index].messageTemplate = target.textContent.trim();
+}, true);
 
 ui.xlsInput.addEventListener('change', async (event) => {
   try {
@@ -46,43 +91,45 @@ ui.xlsInput.addEventListener('change', async (event) => {
     if (!file) return;
 
     parsedRows = await parseWorkbook(file);
-    ui.fileMeta.textContent = `${file.name} loaded with ${parsedRows.length} rows.`;
+    renderRowsTable();
+
+    const invalidCount = parsedRows.filter((r) => !validatePhone(r.mobileNumber)).length;
+    setHint(`${file.name} loaded (${parsedRows.length} rows, invalid phones: ${invalidCount})`);
   } catch (error) {
-    ui.fileMeta.textContent = `Error: ${error.message}`;
     parsedRows = [];
+    ui.tableWrap.classList.add('hidden');
+    ui.previewHint.classList.remove('hidden');
+    setHint(`File error: ${error.message}`, true);
   }
 });
 
 ui.startBtn.addEventListener('click', async () => {
   if (!parsedRows.length) {
-    ui.fileMeta.textContent = 'Please upload a valid XLS/XLSX first.';
+    setHint('Please upload a valid XLS/XLSX first.', true);
     return;
   }
 
-  const minDelayMs = Number(ui.minDelay.value || 3000);
-  const maxDelayMs = Number(ui.maxDelay.value || 10000);
-
-  if (minDelayMs > maxDelayMs) {
-    ui.fileMeta.textContent = 'Min delay cannot be greater than max delay.';
+  const validRows = parsedRows.filter((row) => validatePhone(row.mobileNumber));
+  if (!validRows.length) {
+    setHint('No valid phone numbers found in file.', true);
     return;
   }
 
   const response = await chrome.runtime.sendMessage({
     type: 'START_CAMPAIGN',
     payload: {
-      rows: parsedRows,
-      minDelayMs,
-      maxDelayMs,
-      maxRetries: Number(ui.maxRetries.value || 2)
+      rows: validRows,
+      settings
     }
   });
 
   if (!response?.ok) {
-    ui.fileMeta.textContent = `Failed to start: ${response?.error || 'unknown error'}`;
+    setHint(`Start failed: ${response?.error || 'Unknown error'}`, true);
     return;
   }
 
-  renderProgress(response.progress);
+  setHint(`Campaign started with ${validRows.length} rows.`);
+  updateProgress(response.progress);
 });
 
 ui.pauseBtn.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'PAUSE_CAMPAIGN' }));
@@ -107,11 +154,9 @@ ui.scrapeBtn.addEventListener('click', async () => {
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'PROGRESS_UPDATE') {
-    renderProgress(message.progress, message.latest);
-  }
-  if (message.type === 'CAMPAIGN_COMPLETED') {
-    ui.latestLog.textContent = 'Campaign completed successfully.';
+    updateProgress(message.progress, message.latest);
   }
 });
 
-getProgress();
+await loadSettings();
+await syncProgress();

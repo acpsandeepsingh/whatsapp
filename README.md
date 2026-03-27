@@ -1,22 +1,8 @@
-# WA Bulk Messenger Pro (Chrome Extension - Manifest V3)
+# WA Bulk Messenger Pro (Manifest V3)
 
-> Educational automation scaffold for WhatsApp Web workflow orchestration.
+A Chrome extension for controlled WhatsApp Web bulk messaging with XLS/XLSX import, template personalization, attachment support, queue orchestration, and a full options dashboard.
 
-## Features
-
-- Extract WhatsApp group contacts (name + phone) using content-script auto-scroll.
-- Upload XLS/XLSX-compatible tabular data (required columns below).
-- Queue-based messaging with randomized delays (3–10 sec configurable).
-- Personalized message templating with `{{Sr No}}` and `{{Mobile Number}}` placeholders.
-- URL attachment workflow:
-  - Download from URL with `fetch`
-  - Convert to `Blob` -> `File`
-  - Upload in WhatsApp chat and send
-- Retry engine + error handling.
-- Fallback behavior: if attachment fails, sends plain message with attachment URL.
-- Popup dashboard with start/pause/resume/stop + progress tracking.
-
-## Folder Structure
+## Project Structure
 
 ```text
 manifest.json
@@ -29,6 +15,10 @@ src/
     service-worker.js
   content/
     whatsapp-content.js
+  options/
+    options.html
+    options.css
+    options.js
   popup/
     popup.html
     popup.css
@@ -36,55 +26,89 @@ src/
   services/
     attachment-handler.js
     message-template.js
+    settings.js
     xls-parser.js
   utils/
     delay.js
     selectors.js
 ```
 
-## Required Input Columns
+## Features
 
-The parser expects these headers (case-insensitive fallbacks included):
+- ✅ Manifest V3 popup + service worker + content script connection fixed.
+- ✅ Options page (`src/options/options.html`) with persistent settings in `chrome.storage`.
+- ✅ XLS/XLSX upload and parsing through SheetJS.
+- ✅ Preview table with inline message template editing and phone validation.
+- ✅ Dynamic variables (`{{number}}`, `{{sr_no}}`, and custom column-based placeholders).
+- ✅ Sequential queue engine (pause/resume/stop, retries, progress stats).
+- ✅ Attachment send workflow (`fetch -> Blob -> File -> WhatsApp upload`) with fallback.
+- ✅ Runtime logs and UI progress updates.
 
-1. `Sr No`
-2. `Mobile Number`
-3. `Message Template`
-4. `Attachment URL`
+## Load Extension (Load Unpacked)
 
-See `samples/sample-bulk-format.csv`.
+1. Open Chrome and go to `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select this repository root folder.
+5. Open `https://web.whatsapp.com/` and ensure you are logged in.
 
-## Installation
+## Configure Settings (Options Page)
 
-1. Clone or download this repository.
-2. Open Chrome and go to `chrome://extensions`.
-3. Enable **Developer mode**.
-4. Click **Load unpacked** and select this repository root.
-5. Open `https://web.whatsapp.com/` and keep it logged in.
+1. Click extension icon.
+2. Click **Settings** (top-right), or open extension details -> **Extension options**.
+3. Configure:
+   - Min/Max delay between messages
+   - Random delay toggle
+   - Max messages per session
+   - Max retries
+   - Attachment sending toggle
+   - Default message template
+4. Click **Save Settings**.
 
-## Usage
+## XLS Import Format
 
-1. Click extension icon -> popup opens.
-2. Upload your `.xls/.xlsx` file (or CSV while using bundled shim).
-3. Configure min/max delay + retry count.
+Expected columns (case-insensitive):
+
+- `Sr No`
+- `Mobile Number`
+- `Message Template`
+- `Attachment URL`
+
+You can also add custom columns, and reference them in template placeholders.
+
+Example template:
+
+```text
+Hello {{number}}, your ID is {{sr_no}}.
+```
+
+Custom column example:
+
+```text
+Hi {{customer_name}}, invoice {{invoice_id}} is ready.
+```
+
+## Run Automation Safely
+
+1. Keep WhatsApp Web tab open and active.
+2. Upload XLS/XLSX in popup.
+3. Review table preview:
+   - Invalid phone numbers are flagged.
+   - Edit message templates inline if needed.
 4. Click **Start**.
-5. Use **Pause**, **Resume**, or **Stop** as needed.
-6. Optional: click **Scrape Group Contacts** then download contacts JSON.
+5. Monitor progress (Sent/Pending/Failed) and logs.
+6. Use **Pause/Resume/Stop** as needed.
 
-## Important Notes
+### Safety recommendations
 
-- WhatsApp Web DOM changes frequently; selector fallback arrays are used in `src/utils/selectors.js`.
-- This repo includes a lightweight local `libs/xlsx.full.min.js` shim for offline environments.
-  - For production-grade XLS/XLSX support, replace `libs/xlsx.full.min.js` with the official SheetJS distribution file.
-- Use responsibly and comply with WhatsApp policies and local anti-spam laws.
-
-## Development Notes
-
-- Background orchestration: `src/background/service-worker.js`
-- DOM automation and contact scrape: `src/content/whatsapp-content.js`
-- Parser and attachment conversion logic: `src/services/*`
+- Start with a small test batch first.
+- Keep delay values conservative.
+- Respect WhatsApp and anti-spam policies.
+- Use only verified, consented recipient lists.
 
 ## Troubleshooting
 
-- **"Open WhatsApp Web in a tab first"**: ensure a tab with `https://web.whatsapp.com/*` is open.
-- **Attachment upload fails**: URL may block CORS or file type may be unsupported by WhatsApp; engine falls back to URL text.
-- **No contacts scraped**: open a group participant view before triggering scrape.
+- **No UI / popup not working**: reload extension in `chrome://extensions`.
+- **Automation not starting**: ensure WhatsApp Web tab is open (`https://web.whatsapp.com/*`).
+- **Attachment fails**: remote URL may block CORS or be inaccessible; system falls back to text + attachment URL.
+- **No contacts scraped**: open group participant list before clicking **Scrape Group Contacts**.

@@ -1,18 +1,25 @@
 :root {
   color-scheme: light dark;
-  font-family: Arial, sans-serif;
+  font-family: Inter, Arial, sans-serif;
 }
 
 body {
   margin: 0;
-  width: 380px;
+  width: 430px;
+  background: #0f172a;
+  color: #e2e8f0;
 }
 
 .app {
   padding: 12px;
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 10px;
+}
+
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 h1 {
@@ -26,65 +33,115 @@ h2 {
 }
 
 .card {
-  border: 1px solid #c8c8c8;
+  background: #1e293b;
   border-radius: 8px;
   padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.grid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-}
-
-input[type='number'],
-input[type='file'] {
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.actions {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
   gap: 8px;
 }
 
 button,
-#downloadContacts {
-  border: none;
+.settings-link {
+  border: 0;
   border-radius: 6px;
   padding: 8px 10px;
   cursor: pointer;
-  background: #25d366;
-  color: #fff;
-  text-align: center;
-  text-decoration: none;
+  font-weight: 600;
+}
+
+button {
+  background: #22c55e;
+  color: #062711;
 }
 
 button.secondary {
-  background: #607d8b;
+  background: #334155;
+  color: #e2e8f0;
 }
 
 button.danger {
-  background: #d32f2f;
+  background: #ef4444;
+  color: white;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
 }
 
 .hint {
   margin: 0;
+  color: #94a3b8;
   font-size: 12px;
-  opacity: 0.85;
 }
 
-#latestLog {
-  white-space: pre-wrap;
-  max-height: 110px;
-  overflow: auto;
+progress {
+  width: 100%;
+}
+
+pre {
   margin: 0;
+  max-height: 90px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
   font-size: 11px;
-  background: rgba(0, 0, 0, 0.05);
+  background: #0b1220;
   padding: 8px;
   border-radius: 6px;
+}
+
+.table-wrap {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid #334155;
+  border-radius: 6px;
+}
+
+.hidden {
+  display: none;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+th,
+td {
+  padding: 6px;
+  border-bottom: 1px solid #334155;
+  text-align: left;
+  vertical-align: top;
+}
+
+td[contenteditable='true'] {
+  background: #0f172a;
+  outline: 1px solid transparent;
+}
+
+td[contenteditable='true']:focus {
+  outline-color: #38bdf8;
+}
+
+.status-ok {
+  color: #4ade80;
+}
+
+.status-bad {
+  color: #f87171;
+}
+
+.settings-link {
+  background: #334155;
+  color: #e2e8f0;
+  text-decoration: none;
+}
+
+#downloadContacts {
+  color: #93c5fd;
+  text-decoration: underline;
+  font-size: 12px;
 }

@@ -4,43 +4,17 @@ const SELECTORS = {
     'footer [contenteditable="true"][data-tab="1"]',
     'footer div[role="textbox"][contenteditable="true"]'
   ],
-  sendButton: [
-    'button[aria-label="Send"]',
-    'span[data-icon="send"]',
-    'button span[data-icon="send"]'
-  ],
-  attachButton: [
-    'button[title="Attach"]',
-    'div[aria-label="Attach"]',
-    'span[data-icon="plus-rounded"]'
-  ],
-  fileInput: [
-    'input[type="file"]',
-    'input[accept*="image"], input[accept*="video"], input[accept*="*/*"]'
-  ],
-  participantsContainer: [
-    'div[aria-label*="Participants"]',
-    '#app div[role="application"] div[tabindex="-1"]'
-  ],
-  participantRows: [
-    '[role="listitem"]',
-    'div[data-testid="cell-frame-container"]',
-    'div[tabindex="-1"]'
-  ]
+  sendButton: ['button[aria-label="Send"]', 'span[data-icon="send"]', 'button span[data-icon="send"]'],
+  attachButton: ['button[title="Attach"]', 'div[aria-label="Attach"]', 'span[data-icon="plus-rounded"]'],
+  fileInput: ['input[type="file"]', 'input[accept*="image"], input[accept*="video"], input[accept*="*/*"]'],
+  participantsContainer: ['div[aria-label*="Participants"]', '#app div[role="application"] div[tabindex="-1"]'],
+  participantRows: ['[role="listitem"]', 'div[data-testid="cell-frame-container"]', 'div[tabindex="-1"]']
 };
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function normalizePhone(value) {
-  return String(value || '').replace(/[^\d]/g, '');
-}
-
-function buildPersonalizedMessage(template, row) {
-  const safeTemplate = String(template || '');
-  return safeTemplate
-    .replace(/\{\{\s*sr\s*no\s*\}\}/gi, row.srNo ?? '')
-    .replace(/\{\{\s*mobile\s*number\s*\}\}/gi, row.phone ?? '')
-    .trim();
+function log(...args) {
+  console.log('[WA Bulk][Content]', ...args);
 }
 
 function queryWithFallback(selectors, root = document) {
@@ -59,25 +33,11 @@ function queryAllWithFallback(selectors, root = document) {
   return [];
 }
 
-async function downloadAttachmentAsFile(url) {
-  const response = await fetch(url, { method: 'GET', credentials: 'omit' });
-  if (!response.ok) {
-    throw new Error(`Attachment download failed (${response.status})`);
-  }
-
-  const blob = await response.blob();
-  const parsed = new URL(url, window.location.href);
-  const pathname = parsed.pathname.split('/').pop() || `attachment-${Date.now()}`;
-  const hasExt = pathname.includes('.');
-  const fileName = hasExt ? pathname : `${pathname}.${blob.type.split('/')[1] || 'bin'}`;
-
-  return new File([blob], fileName, {
-    type: blob.type || 'application/octet-stream',
-    lastModified: Date.now()
-  });
+function normalizePhone(value) {
+  return String(value || '').replace(/[^\d]/g, '');
 }
 
-async function waitForElement(selectors, timeoutMs = 20000, pollMs = 250, root = document) {
+async function waitForElement(selectors, timeoutMs = 25000, pollMs = 250, root = document) {
   const maxTries = Math.ceil(timeoutMs / pollMs);
   for (let i = 0; i < maxTries; i += 1) {
     const found = queryWithFallback(selectors, root);
@@ -89,57 +49,80 @@ async function waitForElement(selectors, timeoutMs = 20000, pollMs = 250, root =
 
 async function openChatByPhone(phone) {
   const normalized = normalizePhone(phone);
+  if (!normalized) throw new Error('Invalid phone number');
+
   const target = `https://web.whatsapp.com/send?phone=${encodeURIComponent(normalized)}`;
   if (window.location.href !== target) {
+    log('Navigating to chat URL for', normalized);
     window.location.href = target;
   }
 
-  const messageBox = await waitForElement(SELECTORS.messageBox, 30000);
-  if (!messageBox) throw new Error('Unable to open chat or message box not found.');
+  const messageBox = await waitForElement(SELECTORS.messageBox, 35000);
+  if (!messageBox) throw new Error('Unable to open chat or locate message box');
   return messageBox;
 }
 
 async function setMessageAndSend(text) {
-  const box = await waitForElement(SELECTORS.messageBox, 20000);
-  if (!box) throw new Error('Message box not found.');
+  const message = String(text || '').trim();
+  if (!message) throw new Error('Message is empty after template processing');
+
+  const box = await waitForElement(SELECTORS.messageBox, 15000);
+  if (!box) throw new Error('Message box not found');
 
   box.focus();
-  document.execCommand('insertText', false, text);
-  await wait(200);
+  document.execCommand('selectAll', false, null);
+  document.execCommand('insertText', false, message);
+  box.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  await wait(250);
 
   const sendEl = queryWithFallback(SELECTORS.sendButton);
   if (sendEl) {
-    sendEl.closest('button')?.click();
-    sendEl.click();
+    (sendEl.closest('button') || sendEl).click();
   } else {
     box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   }
+
+  await wait(800);
+}
+
+async function downloadAttachmentAsFile(url) {
+  const response = await fetch(url, { method: 'GET', credentials: 'omit' });
+  if (!response.ok) {
+    throw new Error(`Attachment download failed (${response.status})`);
+  }
+
+  const blob = await response.blob();
+  const parsed = new URL(url, window.location.href);
+  const pathname = parsed.pathname.split('/').pop() || `attachment-${Date.now()}`;
+  const fileName = pathname.includes('.') ? pathname : `${pathname}.${blob.type.split('/')[1] || 'bin'}`;
+
+  return new File([blob], fileName, {
+    type: blob.type || 'application/octet-stream',
+    lastModified: Date.now()
+  });
 }
 
 async function uploadAndSendAttachment(file) {
   const attach = queryWithFallback(SELECTORS.attachButton);
-  if (!attach) throw new Error('Attachment button not found.');
+  if (!attach) throw new Error('Attachment button not found');
 
-  attach.closest('button')?.click();
-  attach.click();
-  await wait(800);
+  (attach.closest('button') || attach).click();
+  await wait(600);
 
   const input = await waitForElement(SELECTORS.fileInput, 8000);
-  if (!input) throw new Error('File input not found after clicking attach.');
+  if (!input) throw new Error('File input not found after clicking attach');
 
   const dt = new DataTransfer();
   dt.items.add(file);
   input.files = dt.files;
   input.dispatchEvent(new Event('change', { bubbles: true }));
-
   await wait(1500);
 
-  const sendEl = queryWithFallback(SELECTORS.sendButton);
-  if (!sendEl) throw new Error('Send button not visible after file upload.');
+  const sendEl = await waitForElement(SELECTORS.sendButton, 10000);
+  if (!sendEl) throw new Error('Send button not found after media upload');
 
-  sendEl.closest('button')?.click();
-  sendEl.click();
-  await wait(1200);
+  (sendEl.closest('button') || sendEl).click();
+  await wait(1300);
 }
 
 function readContactFromRow(row) {
@@ -167,7 +150,7 @@ async function scrapeGroupContacts() {
     });
 
     panel.scrollTop = panel.scrollHeight;
-    await wait(550);
+    await wait(500);
 
     if (discovered.size === previousCount) {
       unchangedScrolls += 1;
@@ -182,37 +165,29 @@ async function scrapeGroupContacts() {
   return [...discovered.values()];
 }
 
-async function sendSingleMessage({ srNo, phone, message, attachmentUrl }) {
+async function sendSingleMessage({ srNo, phone, message, attachmentUrl, attachmentSendingEnabled = true }) {
+  log('Processing row', srNo, phone);
   await openChatByPhone(phone);
-  const personalized = buildPersonalizedMessage(message, { srNo, phone });
 
-  let attachmentError = null;
-
-  if (attachmentUrl) {
+  if (attachmentSendingEnabled && attachmentUrl) {
     try {
       const file = await downloadAttachmentAsFile(attachmentUrl);
       await uploadAndSendAttachment(file);
-      if (personalized.trim()) {
-        await wait(650);
-        await setMessageAndSend(personalized);
+      if (message?.trim()) {
+        await wait(700);
+        await setMessageAndSend(message);
       }
       return { ok: true, mode: 'attachment+text' };
     } catch (error) {
-      attachmentError = error;
+      log('Attachment failed, using fallback', error.message);
+      const fallbackText = [message, `Attachment: ${attachmentUrl}`].filter(Boolean).join('\n\n').trim();
+      await setMessageAndSend(fallbackText);
+      return { ok: true, mode: 'text+attachment-url-fallback', warning: error.message };
     }
   }
 
-  const fallbackText = attachmentUrl
-    ? `${personalized}\n\nAttachment: ${attachmentUrl}`.trim()
-    : personalized;
-
-  await setMessageAndSend(fallbackText);
-
-  return {
-    ok: true,
-    mode: attachmentUrl && attachmentError ? 'text+url-fallback' : 'text',
-    warning: attachmentError?.message
-  };
+  await setMessageAndSend(message);
+  return { ok: true, mode: 'text' };
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -234,7 +209,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       default:
         sendResponse({ ok: false, error: 'Unsupported content action' });
     }
-  })().catch((error) => sendResponse({ ok: false, error: error.message }));
+  })().catch((error) => {
+    log('Handler error', error);
+    sendResponse({ ok: false, error: error.message });
+  });
 
   return true;
 });

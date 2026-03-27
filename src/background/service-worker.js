@@ -1,4 +1,6 @@
 import { randomBetween, wait } from '../utils/delay.js';
+import { applyTemplate, normalizePhone } from '../services/message-template.js';
+import { DEFAULT_SETTINGS, loadSettings, saveSettings, sanitizeSettings } from '../services/settings.js';
 
 const state = {
   queue: [],
@@ -9,13 +11,11 @@ const state = {
     total: 0,
     sent: 0,
     failed: 0,
-    skipped: 0,
+    pending: 0,
     retries: 0
   },
   activeTabId: null,
-  maxRetries: 2,
-  minDelayMs: 3000,
-  maxDelayMs: 10000
+  settings: { ...DEFAULT_SETTINGS }
 };
 
 async function getWhatsAppTab() {
@@ -40,10 +40,6 @@ async function sendToContent(payload) {
   return chrome.tabs.sendMessage(tab.id, payload);
 }
 
-async function persistState() {
-  await chrome.storage.local.set({ campaignState: state });
-}
-
 function getProgress() {
   return {
     running: state.running,
@@ -51,18 +47,43 @@ function getProgress() {
     currentIndex: state.currentIndex,
     stats: { ...state.stats },
     total: state.queue.length,
-    activeTabId: state.activeTabId
+    settings: { ...state.settings }
   };
 }
 
-async function broadcastProgress(extra = {}) {
-  const payload = { type: 'PROGRESS_UPDATE', progress: getProgress(), ...extra };
+async function persistState() {
+  await chrome.storage.local.set({ campaignState: getProgress() });
+}
+
+async function broadcastProgress(latest = null) {
+  const payload = { type: 'PROGRESS_UPDATE', progress: getProgress(), latest };
   try {
     await chrome.runtime.sendMessage(payload);
-  } catch (_error) {
-    // Popup may be closed; ignore.
+  } catch (_err) {
+    // popup/options can be closed
   }
   await persistState();
+}
+
+function getPerMessageDelay() {
+  const { minDelayMs, maxDelayMs, randomDelayEnabled } = state.settings;
+  if (!randomDelayEnabled || minDelayMs === maxDelayMs) return minDelayMs;
+  return randomBetween(minDelayMs, maxDelayMs);
+}
+
+function transformQueueRows(rows = []) {
+  return rows.slice(0, state.settings.maxMessagesPerSession).map((row, index) => {
+    const effectiveTemplate = row.messageTemplate || state.settings.defaultTemplate;
+    return {
+      ...row,
+      srNo: row.srNo || index + 1,
+      mobileNumber: normalizePhone(row.mobileNumber || ''),
+      messageTemplate: effectiveTemplate,
+      renderedMessage: applyTemplate(effectiveTemplate, row),
+      attachmentUrl: row.attachmentUrl || '',
+      _retryCount: 0
+    };
+  });
 }
 
 async function processQueue() {
@@ -70,7 +91,7 @@ async function processQueue() {
 
   while (state.currentIndex < state.queue.length && state.running) {
     if (state.paused) {
-      await wait(350);
+      await wait(300);
       continue;
     }
 
@@ -80,69 +101,85 @@ async function processQueue() {
       data: {
         srNo: item.srNo,
         phone: item.mobileNumber,
-        message: item.messageTemplate,
-        attachmentUrl: item.attachmentUrl
+        message: item.renderedMessage,
+        attachmentUrl: state.settings.attachmentSendingEnabled ? item.attachmentUrl : '',
+        attachmentSendingEnabled: state.settings.attachmentSendingEnabled,
+        rawRow: item.raw || {}
       }
     };
 
     try {
+      console.log('[WA Bulk] Sending row', state.currentIndex + 1, payload.data);
       const result = await sendToContent(payload);
-      if (result?.ok) {
-        state.stats.sent += 1;
-      } else {
-        throw new Error(result?.error || 'Unknown content script error');
-      }
+      if (!result?.ok) throw new Error(result?.error || 'Unknown send error');
+
+      state.stats.sent += 1;
+      state.currentIndex += 1;
+      state.stats.pending = state.queue.length - state.currentIndex;
+      await broadcastProgress({
+        status: 'success',
+        index: state.currentIndex,
+        phone: item.mobileNumber,
+        detail: result.mode || 'text'
+      });
     } catch (error) {
-      item._retryCount = item._retryCount || 0;
-      if (item._retryCount < state.maxRetries) {
-        item._retryCount += 1;
+      item._retryCount += 1;
+      if (item._retryCount <= state.settings.maxRetries) {
         state.stats.retries += 1;
         await broadcastProgress({
-          latest: {
-            status: 'retrying',
-            phone: item.mobileNumber,
-            reason: error.message,
-            retry: item._retryCount
-          }
-        });
-        await wait(randomBetween(1500, 3500));
-        continue;
-      }
-      state.stats.failed += 1;
-      await broadcastProgress({
-        latest: {
-          status: 'failed',
+          status: 'retrying',
+          index: state.currentIndex + 1,
+          retry: item._retryCount,
           phone: item.mobileNumber,
           reason: error.message
-        }
+        });
+        await wait(1200);
+        continue;
+      }
+
+      state.stats.failed += 1;
+      state.currentIndex += 1;
+      state.stats.pending = state.queue.length - state.currentIndex;
+      await broadcastProgress({
+        status: 'failed',
+        index: state.currentIndex,
+        phone: item.mobileNumber,
+        reason: error.message
       });
     }
 
-    state.currentIndex += 1;
-    await broadcastProgress({
-      latest: {
-        status: 'processed',
-        phone: item.mobileNumber,
-        index: state.currentIndex
-      }
-    });
-
-    const jitter = randomBetween(state.minDelayMs, state.maxDelayMs);
-    await wait(jitter);
+    await wait(getPerMessageDelay());
   }
 
   if (state.currentIndex >= state.queue.length) {
     state.running = false;
     state.paused = false;
-    await broadcastProgress({ type: 'CAMPAIGN_COMPLETED' });
+    await broadcastProgress({ status: 'completed' });
   }
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     switch (message.type) {
+      case 'GET_SETTINGS': {
+        sendResponse({ ok: true, settings: state.settings });
+        break;
+      }
+      case 'SAVE_SETTINGS': {
+        state.settings = await saveSettings(message.payload || {});
+        sendResponse({ ok: true, settings: state.settings });
+        break;
+      }
+      case 'GET_PROGRESS': {
+        sendResponse({ ok: true, progress: getProgress() });
+        break;
+      }
       case 'START_CAMPAIGN': {
-        state.queue = message.payload.rows.map((row) => ({ ...row }));
+        const incomingSettings = message.payload?.settings || {};
+        state.settings = sanitizeSettings({ ...state.settings, ...incomingSettings });
+        await saveSettings(state.settings);
+
+        state.queue = transformQueueRows(message.payload?.rows || []);
         state.currentIndex = 0;
         state.running = true;
         state.paused = false;
@@ -150,55 +187,59 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           total: state.queue.length,
           sent: 0,
           failed: 0,
-          skipped: 0,
+          pending: state.queue.length,
           retries: 0
         };
 
-        if (message.payload.minDelayMs) state.minDelayMs = message.payload.minDelayMs;
-        if (message.payload.maxDelayMs) state.maxDelayMs = message.payload.maxDelayMs;
-        if (message.payload.maxRetries !== undefined) state.maxRetries = message.payload.maxRetries;
-
         await getWhatsAppTab();
-        await broadcastProgress();
+        await broadcastProgress({ status: 'started' });
         processQueue();
         sendResponse({ ok: true, progress: getProgress() });
         break;
       }
-      case 'PAUSE_CAMPAIGN':
+      case 'PAUSE_CAMPAIGN': {
         state.paused = true;
-        await broadcastProgress();
+        await broadcastProgress({ status: 'paused' });
         sendResponse({ ok: true });
         break;
-      case 'RESUME_CAMPAIGN':
+      }
+      case 'RESUME_CAMPAIGN': {
         if (state.running) {
           state.paused = false;
-          await broadcastProgress();
+          await broadcastProgress({ status: 'resumed' });
           processQueue();
         }
         sendResponse({ ok: true });
         break;
-      case 'STOP_CAMPAIGN':
+      }
+      case 'STOP_CAMPAIGN': {
         state.running = false;
         state.paused = false;
-        await broadcastProgress();
+        await broadcastProgress({ status: 'stopped' });
         sendResponse({ ok: true });
         break;
+      }
       case 'SCRAPE_CONTACTS': {
         const contacts = await sendToContent({ type: 'SCRAPE_CONTACTS' });
         sendResponse({ ok: true, contacts });
         break;
       }
-      case 'GET_PROGRESS':
-        sendResponse({ ok: true, progress: getProgress() });
-        break;
       default:
         sendResponse({ ok: false, error: 'Unknown message type' });
     }
-  })().catch((error) => sendResponse({ ok: false, error: error.message }));
+  })().catch((error) => {
+    console.error('[WA Bulk] Background error', error);
+    sendResponse({ ok: false, error: error.message });
+  });
 
   return true;
 });
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({ campaignState: state });
+chrome.runtime.onInstalled.addListener(async () => {
+  state.settings = await loadSettings();
+  await chrome.storage.local.set({ campaignState: getProgress() });
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  state.settings = await loadSettings();
 });

@@ -8,7 +8,10 @@
   </head>
   <body>
     <main class="app">
-      <h1>WA Bulk Messenger</h1>
+      <header class="header-row">
+        <h1>WA Bulk Messenger</h1>
+        <a class="settings-link" href="../options/options.html" target="_blank" rel="noreferrer">Settings</a>
+      </header>
 
       <section class="card">
         <label for="xlsInput">Upload XLS/XLSX</label>
@@ -16,22 +19,14 @@
         <p id="fileMeta" class="hint">No file selected.</p>
       </section>
 
-      <section class="card grid">
-        <label>Min Delay (ms) <input id="minDelay" type="number" min="1000" value="3000" /></label>
-        <label>Max Delay (ms) <input id="maxDelay" type="number" min="1000" value="10000" /></label>
-        <label>Retries <input id="maxRetries" type="number" min="0" value="2" /></label>
-      </section>
-
-      <section class="actions">
-        <button id="startBtn">Start</button>
-        <button id="pauseBtn" class="secondary">Pause</button>
-        <button id="resumeBtn" class="secondary">Resume</button>
-        <button id="stopBtn" class="danger">Stop</button>
-      </section>
-
       <section class="card">
-        <button id="scrapeBtn" class="secondary">Scrape Group Contacts</button>
-        <a id="downloadContacts" download="group-contacts.json">Download contacts JSON</a>
+        <h2>Queue Controls</h2>
+        <div class="actions">
+          <button id="startBtn">Start</button>
+          <button id="pauseBtn" class="secondary">Pause</button>
+          <button id="resumeBtn" class="secondary">Resume</button>
+          <button id="stopBtn" class="danger">Stop</button>
+        </div>
       </section>
 
       <section class="card">
@@ -39,6 +34,30 @@
         <div id="progressText">Idle</div>
         <progress id="progressBar" value="0" max="100"></progress>
         <pre id="latestLog">No recent activity.</pre>
+      </section>
+
+      <section class="card">
+        <h2>Rows Preview</h2>
+        <div id="tableWrap" class="table-wrap hidden">
+          <table>
+            <thead>
+              <tr>
+                <th>Sr No</th>
+                <th>Mobile Number</th>
+                <th>Message Template</th>
+                <th>Attachment URL</th>
+                <th>Valid</th>
+              </tr>
+            </thead>
+            <tbody id="rowsTableBody"></tbody>
+          </table>
+        </div>
+        <p id="previewHint" class="hint">Upload a file to preview and edit rows.</p>
+      </section>
+
+      <section class="card">
+        <button id="scrapeBtn" class="secondary">Scrape Group Contacts</button>
+        <a id="downloadContacts" download="group-contacts.json"></a>
       </section>
     </main>
 

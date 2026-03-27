@@ -1,18 +1,10 @@
 {
   "manifest_version": 3,
   "name": "WA Bulk Messenger Pro",
-  "description": "Scrape WhatsApp group contacts and send personalized bulk messages with URL attachments from XLS/XLSX.",
-  "version": "1.0.0",
-  "permissions": [
-    "storage",
-    "tabs",
-    "scripting",
-    "activeTab"
-  ],
-  "host_permissions": [
-    "https://web.whatsapp.com/*",
-    "<all_urls>"
-  ],
+  "description": "Bulk WhatsApp automation with XLS import, templates, queue controls, and options dashboard.",
+  "version": "2.0.0",
+  "permissions": ["storage", "tabs", "scripting", "activeTab"],
+  "host_permissions": ["https://web.whatsapp.com/*", "<all_urls>"],
   "background": {
     "service_worker": "src/background/service-worker.js",
     "type": "module"
@@ -21,6 +13,7 @@
     "default_popup": "src/popup/popup.html",
     "default_title": "WA Bulk Messenger"
   },
+  "options_page": "src/options/options.html",
   "content_scripts": [
     {
       "matches": ["https://web.whatsapp.com/*"],
