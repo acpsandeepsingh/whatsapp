@@ -71,6 +71,28 @@ function getPerMessageDelay() {
   return randomBetween(minDelayMs, maxDelayMs);
 }
 
+
+async function startCampaign(rows = [], incomingSettings = {}) {
+  state.settings = sanitizeSettings({ ...state.settings, ...incomingSettings });
+  await saveSettings(state.settings);
+
+  state.queue = transformQueueRows(rows || []);
+  state.currentIndex = 0;
+  state.running = true;
+  state.paused = false;
+  state.stats = {
+    total: state.queue.length,
+    sent: 0,
+    failed: 0,
+    pending: state.queue.length,
+    retries: 0
+  };
+
+  await getWhatsAppTab();
+  await broadcastProgress({ status: 'started' });
+  processQueue();
+  return getProgress();
+}
 function transformQueueRows(rows = []) {
   return rows.slice(0, state.settings.maxMessagesPerSession).map((row, index) => {
     const effectiveTemplate = row.messageTemplate || state.settings.defaultTemplate;
@@ -175,26 +197,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case 'START_CAMPAIGN': {
-        const incomingSettings = message.payload?.settings || {};
-        state.settings = sanitizeSettings({ ...state.settings, ...incomingSettings });
-        await saveSettings(state.settings);
+        const progress = await startCampaign(message.payload?.rows || [], message.payload?.settings || {});
+        sendResponse({ ok: true, progress });
+        break;
+      }
+      case 'START_CAMPAIGN_FROM_STORAGE': {
+        const stored = await chrome.storage.local.get('dashboardRows');
+        const storageRows = Array.isArray(stored.dashboardRows) ? stored.dashboardRows : [];
+        if (!storageRows.length) {
+          throw new Error('No saved rows found. Open dashboard and add/import rows first.');
+        }
 
-        state.queue = transformQueueRows(message.payload?.rows || []);
-        state.currentIndex = 0;
-        state.running = true;
-        state.paused = false;
-        state.stats = {
-          total: state.queue.length,
-          sent: 0,
-          failed: 0,
-          pending: state.queue.length,
-          retries: 0
-        };
-
-        await getWhatsAppTab();
-        await broadcastProgress({ status: 'started' });
-        processQueue();
-        sendResponse({ ok: true, progress: getProgress() });
+        const progress = await startCampaign(storageRows, {});
+        sendResponse({ ok: true, progress });
         break;
       }
       case 'PAUSE_CAMPAIGN': {

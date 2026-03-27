@@ -6,32 +6,41 @@ body {
 }
 
 .container {
-  max-width: 760px;
-  margin: 24px auto;
-  padding: 0 16px;
+  max-width: 1250px;
+  margin: 20px auto;
+  padding: 0 16px 30px;
+}
+
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .panel {
   background: #1e293b;
   border-radius: 10px;
-  padding: 16px;
-  margin-bottom: 16px;
+  padding: 14px;
+  margin-top: 12px;
 }
 
-form {
-  display: grid;
-  gap: 12px;
+.button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-label {
-  display: grid;
-  gap: 4px;
-  font-weight: 600;
-}
-
+button,
 input,
-textarea,
-button {
+textarea {
   padding: 10px;
   border-radius: 8px;
   border: 1px solid #334155;
@@ -39,27 +48,82 @@ button {
   color: #e2e8f0;
 }
 
-.checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 button {
   background: #22c55e;
   color: #052e16;
   border: none;
-  cursor: pointer;
   font-weight: 700;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+button.danger {
+  background: #ef4444;
+  color: #fff;
+}
+
+progress {
+  width: 100%;
+}
+
+.table-panel {
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 980px;
+}
+
+th,
+td {
+  border-bottom: 1px solid #334155;
+  padding: 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+td[contenteditable='true'] {
+  background: #0b1220;
+  min-width: 140px;
+}
+
+tr.status-sent td:last-child,
+.status-pill.sent {
+  color: #22c55e;
+}
+
+.status-pill.failed {
+  color: #f87171;
+}
+
+.status-pill.pending {
+  color: #facc15;
+}
+
+pre {
+  margin: 0;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  background: #0b1220;
+  padding: 8px;
+  border-radius: 6px;
+}
+
+.muted {
+  color: #94a3b8;
+  margin: 0;
 }
 
 #statusText {
-  margin: 0;
+  margin: 10px 0 0;
   color: #93c5fd;
-}
-
-code {
-  background: #0b1220;
-  padding: 2px 4px;
-  border-radius: 4px;
 }

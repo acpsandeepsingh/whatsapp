@@ -8,60 +8,19 @@
   </head>
   <body>
     <main class="app">
-      <header class="header-row">
-        <h1>WA Bulk Messenger</h1>
-        <a class="settings-link" href="../options/options.html" target="_blank" rel="noreferrer">Settings</a>
-      </header>
+      <h1>WA Bulk Messenger</h1>
+      <p class="hint">Quick actions</p>
 
-      <section class="card">
-        <label for="xlsInput">Upload XLS/XLSX</label>
-        <input id="xlsInput" type="file" accept=".xls,.xlsx" />
-        <p id="fileMeta" class="hint">No file selected.</p>
-      </section>
+      <button id="openDashboardBtn">Open Dashboard</button>
+      <button id="startAutomationBtn">Start Automation</button>
+      <button id="checkStatusBtn" class="secondary">Check Status</button>
 
-      <section class="card">
-        <h2>Queue Controls</h2>
-        <div class="actions">
-          <button id="startBtn">Start</button>
-          <button id="pauseBtn" class="secondary">Pause</button>
-          <button id="resumeBtn" class="secondary">Resume</button>
-          <button id="stopBtn" class="danger">Stop</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Progress</h2>
-        <div id="progressText">Idle</div>
-        <progress id="progressBar" value="0" max="100"></progress>
+      <section class="status-card">
+        <p id="statusText">Status: Idle</p>
         <pre id="latestLog">No recent activity.</pre>
-      </section>
-
-      <section class="card">
-        <h2>Rows Preview</h2>
-        <div id="tableWrap" class="table-wrap hidden">
-          <table>
-            <thead>
-              <tr>
-                <th>Sr No</th>
-                <th>Mobile Number</th>
-                <th>Message Template</th>
-                <th>Attachment URL</th>
-                <th>Valid</th>
-              </tr>
-            </thead>
-            <tbody id="rowsTableBody"></tbody>
-          </table>
-        </div>
-        <p id="previewHint" class="hint">Upload a file to preview and edit rows.</p>
-      </section>
-
-      <section class="card">
-        <button id="scrapeBtn" class="secondary">Scrape Group Contacts</button>
-        <a id="downloadContacts" download="group-contacts.json"></a>
       </section>
     </main>
 
-    <script src="../../libs/xlsx.full.min.js"></script>
     <script type="module" src="popup.js"></script>
   </body>
 </html>
