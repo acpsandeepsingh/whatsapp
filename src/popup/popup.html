@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WA Bulk Messenger</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="app">
+      <h1>WA Bulk Messenger</h1>
+
+      <section class="card">
+        <label for="xlsInput">Upload XLS/XLSX</label>
+        <input id="xlsInput" type="file" accept=".xls,.xlsx" />
+        <p id="fileMeta" class="hint">No file selected.</p>
+      </section>
+
+      <section class="card grid">
+        <label>Min Delay (ms) <input id="minDelay" type="number" min="1000" value="3000" /></label>
+        <label>Max Delay (ms) <input id="maxDelay" type="number" min="1000" value="10000" /></label>
+        <label>Retries <input id="maxRetries" type="number" min="0" value="2" /></label>
+      </section>
+
+      <section class="actions">
+        <button id="startBtn">Start</button>
+        <button id="pauseBtn" class="secondary">Pause</button>
+        <button id="resumeBtn" class="secondary">Resume</button>
+        <button id="stopBtn" class="danger">Stop</button>
+      </section>
+
+      <section class="card">
+        <button id="scrapeBtn" class="secondary">Scrape Group Contacts</button>
+        <a id="downloadContacts" download="group-contacts.json">Download contacts JSON</a>
+      </section>
+
+      <section class="card">
+        <h2>Progress</h2>
+        <div id="progressText">Idle</div>
+        <progress id="progressBar" value="0" max="100"></progress>
+        <pre id="latestLog">No recent activity.</pre>
+      </section>
+    </main>
+
+    <script src="../../libs/xlsx.full.min.js"></script>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

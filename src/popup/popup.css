@@ -1,0 +1,90 @@
+:root {
+  color-scheme: light dark;
+  font-family: Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+  width: 380px;
+}
+
+.app {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.card {
+  border: 1px solid #c8c8c8;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+input[type='number'],
+input[type='file'] {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+button,
+#downloadContacts {
+  border: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: #25d366;
+  color: #fff;
+  text-align: center;
+  text-decoration: none;
+}
+
+button.secondary {
+  background: #607d8b;
+}
+
+button.danger {
+  background: #d32f2f;
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+#latestLog {
+  white-space: pre-wrap;
+  max-height: 110px;
+  overflow: auto;
+  margin: 0;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 8px;
+  border-radius: 6px;
+}
