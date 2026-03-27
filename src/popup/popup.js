@@ -11,6 +11,12 @@ const ui = {
 
 let chatSnapshot = { groups: [], countryCodes: [] };
 
+const CHAT_SCOPE_OPTIONS = [
+  { value: 'all_chats', label: 'All Chats' },
+  { value: 'unread_chats', label: 'Unread Chats' },
+  { value: 'read_chats', label: 'Read Chats' }
+];
+
 function setStatus(text, isError = false) {
   ui.statusText.textContent = text;
   ui.statusText.style.color = isError ? '#fecaca' : '#93c5fd';
@@ -37,8 +43,29 @@ function buildSecondaryOptions(values, placeholder = 'Select value') {
 function refreshSecondaryFilter() {
   const primary = ui.primaryFilter.value;
 
+  if (primary === 'all_contacts') {
+    buildSecondaryOptions(
+      CHAT_SCOPE_OPTIONS.map((option) => option.value),
+      'Choose chat scope'
+    );
+
+    const options = [...ui.secondaryFilter.options];
+    options.forEach((option, index) => {
+      if (index > 0) {
+        option.textContent = CHAT_SCOPE_OPTIONS[index - 1].label;
+      }
+    });
+    return;
+  }
+
   if (primary === 'specific_group') {
     buildSecondaryOptions(chatSnapshot.groups || [], 'Choose group');
+    return;
+  }
+
+  if (primary === 'label') {
+    ui.secondaryFilter.innerHTML = '<option value="">No labels available</option>';
+    ui.secondaryFilter.disabled = true;
     return;
   }
 
@@ -49,6 +76,13 @@ function refreshSecondaryFilter() {
 
   ui.secondaryFilter.innerHTML = '<option value="">Not required</option>';
   ui.secondaryFilter.disabled = true;
+}
+
+async function ensureActiveWhatsAppTab() {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const isValidTab = Boolean(activeTab?.id && activeTab.url?.startsWith('https://web.whatsapp.com/'));
+  if (isValidTab) return activeTab;
+  throw new Error('Open WhatsApp Web in the active tab, then try again.');
 }
 
 async function loadSettings() {
@@ -79,6 +113,14 @@ async function fetchSnapshot() {
 
 async function fetchContacts() {
   setStatus('Sending...');
+
+  try {
+    await ensureActiveWhatsAppTab();
+  } catch (error) {
+    setStatus(error.message, true);
+    ui.latestLog.textContent = JSON.stringify({ success: false, error: error.message }, null, 2);
+    return;
+  }
 
   if (!(await fetchSnapshot())) return;
 

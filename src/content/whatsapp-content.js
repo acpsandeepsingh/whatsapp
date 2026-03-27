@@ -2,6 +2,7 @@ import { ACTIONS, getAction } from '../shared/actions.js';
 
 const SELECTORS = {
   appReady: ['#app'],
+  paneSide: ['#pane-side'],
   chatSearchInputs: [
     'div[role="search"] [contenteditable="true"]',
     'div[aria-label="Search input textbox"][contenteditable="true"]',
@@ -99,9 +100,11 @@ async function waitForElement(selectors, timeoutMs = 25000, pollMs = 250, root =
 async function ensureWhatsAppReady() {
   const app = await waitForElement(SELECTORS.appReady, 25000);
   if (!app) throw new Error('WhatsApp UI not loaded yet.');
+  const paneSide = await waitForElement(SELECTORS.paneSide, 30000);
+  if (!paneSide) throw new Error('WhatsApp chat list is not ready yet (#pane-side missing).');
   const search = await waitForElement(SELECTORS.chatSearchInputs, 30000);
   if (!search) throw new Error('Unable to locate WhatsApp search input in sidebar.');
-  return { app, search };
+  return { app, paneSide, search };
 }
 
 function detectChatTypeFromRow(row) {
@@ -153,10 +156,13 @@ function filterChats(snapshot = {}, filter = {}) {
   const primary = filter.primary || 'all_contacts';
   const secondary = filter.secondary || '';
 
-  if (primary === 'all_contacts' || primary === 'all_chats') return chats;
-  if (primary === 'unread') return chats.filter((chat) => Number(chat.unreadCount) > 0);
-  if (primary === 'read') return chats.filter((chat) => Number(chat.unreadCount) === 0);
+  if (primary === 'all_contacts') {
+    if (secondary === 'unread_chats') return chats.filter((chat) => Number(chat.unreadCount) > 0);
+    if (secondary === 'read_chats') return chats.filter((chat) => Number(chat.unreadCount) === 0);
+    return chats;
+  }
   if (primary === 'specific_group') return chats.filter((chat) => chat.isGroup && chat.name === secondary);
+  if (primary === 'label') return chats.filter((chat) => (chat.labels || []).includes(secondary));
   if (primary === 'country') return chats.filter((chat) => chat.countryCode === secondary);
 
   return chats;
@@ -361,6 +367,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     const action = getAction(message);
     log('ACTION:', action, message);
+
+    if (action !== ACTIONS.PING) {
+      await ensureWhatsAppReady();
+    }
 
     switch (action) {
       case ACTIONS.PING:

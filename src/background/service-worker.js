@@ -20,6 +20,12 @@ const state = {
 };
 
 async function getWhatsAppTab() {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (activeTab?.id && activeTab?.url?.startsWith('https://web.whatsapp.com/')) {
+    state.activeTabId = activeTab.id;
+    return activeTab;
+  }
+
   if (state.activeTabId) {
     try {
       const tab = await chrome.tabs.get(state.activeTabId);
@@ -29,16 +35,43 @@ async function getWhatsAppTab() {
     }
   }
 
-  const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
-  if (!tabs.length) throw new Error('Open WhatsApp Web in a tab first.');
+  throw new Error('Open WhatsApp Web in the active tab first.');
+}
 
-  state.activeTabId = tabs[0].id;
-  return tabs[0];
+function sendTabMessage(tabId, message) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+async function ensureContentReady(tabId) {
+  try {
+    await sendTabMessage(tabId, createMessage(ACTIONS.PING));
+    return;
+  } catch (error) {
+    if (!String(error.message || '').includes('Receiving end does not exist')) {
+      throw error;
+    }
+  }
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['src/content/whatsapp-content.js']
+  });
+  await wait(300);
+  await sendTabMessage(tabId, createMessage(ACTIONS.PING));
 }
 
 async function sendToContent(message) {
   const tab = await getWhatsAppTab();
-  return chrome.tabs.sendMessage(tab.id, message);
+  await ensureContentReady(tab.id);
+  return sendTabMessage(tab.id, message);
 }
 
 function getProgress() {
@@ -284,7 +317,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
   })().catch((error) => {
     console.error('[WA CRM][Background] Handler error', error);
-    sendResponse({ success: false, error: error.message });
+    sendResponse({
+      success: false,
+      error: error.message,
+      action: getAction(message),
+      timestamp: new Date().toISOString()
+    });
   });
 
   return true;
