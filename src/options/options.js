@@ -38,9 +38,14 @@ let rows = [];
 let chatSnapshot = {
   chats: [],
   groups: [],
-  labels: [],
   countryCodes: []
 };
+
+const CHAT_SCOPE_OPTIONS = [
+  { value: 'all_chats', label: 'All Chats' },
+  { value: 'unread_chats', label: 'Unread Chats' },
+  { value: 'read_chats', label: 'Read Chats' }
+];
 
 function uid() {
   return `row-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -204,7 +209,19 @@ function buildSecondaryOptions(values, placeholder = 'Select value') {
 function refreshSecondaryFilter() {
   const primary = ui.primaryFilter.value;
 
-  if (primary === 'specific_group') {
+  if (primary === 'all_contacts') {
+    buildSecondaryOptions(CHAT_SCOPE_OPTIONS.map((option) => option.value), 'Choose chat scope');
+
+    const options = [...ui.secondaryFilter.options];
+    options.forEach((option, index) => {
+      if (index > 0) {
+        option.textContent = CHAT_SCOPE_OPTIONS[index - 1].label;
+      }
+    });
+    return;
+  }
+
+  if (primary === 'group') {
     buildSecondaryOptions(chatSnapshot.groups || [], 'Choose group');
     return;
   }
@@ -236,7 +253,6 @@ async function filteredRowsFromSource() {
     chatSnapshot = {
       chats: response.snapshot.chats || [],
       groups: response.snapshot.groups || [],
-      labels: response.snapshot.labels || [],
       countryCodes: response.snapshot.countryCodes || []
     };
     refreshSecondaryFilter();
@@ -283,7 +299,6 @@ async function syncChatsSnapshot() {
   chatSnapshot = {
     chats: response.chats || [],
     groups: response.groups || [],
-    labels: response.labels || [],
     countryCodes: response.countryCodes || []
   };
 
@@ -295,8 +310,8 @@ async function syncChatsSnapshot() {
 
 async function scrapeSelectedGroup() {
   const groupName = ui.secondaryFilter.value;
-  if (ui.primaryFilter.value !== 'specific_group' || !groupName) {
-    setStatus('Select "Specific Group" and choose a group first.', true);
+  if (ui.primaryFilter.value !== 'group' || !groupName) {
+    setStatus('Select "Group" and choose a group first.', true);
     return;
   }
 

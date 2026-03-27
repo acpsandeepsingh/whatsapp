@@ -19,9 +19,13 @@ const state = {
   settings: { ...DEFAULT_SETTINGS }
 };
 
+function isWhatsAppWebUrl(url) {
+  return /^https:\/\/web\.whatsapp\.com(\/|$)/.test(String(url || ''));
+}
+
 async function getWhatsAppTab() {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (activeTab?.id && activeTab?.url?.startsWith('https://web.whatsapp.com/')) {
+  if (activeTab?.id && isWhatsAppWebUrl(activeTab.url)) {
     state.activeTabId = activeTab.id;
     return activeTab;
   }
@@ -29,7 +33,7 @@ async function getWhatsAppTab() {
   if (state.activeTabId) {
     try {
       const tab = await chrome.tabs.get(state.activeTabId);
-      if (tab?.url?.startsWith('https://web.whatsapp.com/')) return tab;
+      if (tab?.id && isWhatsAppWebUrl(tab.url)) return tab;
     } catch (_error) {
       state.activeTabId = null;
     }
@@ -43,6 +47,10 @@ function sendTabMessage(tabId, message) {
     chrome.tabs.sendMessage(tabId, message, (response) => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (!response) {
+        reject(new Error('No response from content script.'));
         return;
       }
       resolve(response);

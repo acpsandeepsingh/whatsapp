@@ -161,8 +161,7 @@ function filterChats(snapshot = {}, filter = {}) {
     if (secondary === 'read_chats') return chats.filter((chat) => Number(chat.unreadCount) === 0);
     return chats;
   }
-  if (primary === 'specific_group') return chats.filter((chat) => chat.isGroup && chat.name === secondary);
-  if (primary === 'label') return chats.filter((chat) => (chat.labels || []).includes(secondary));
+  if (primary === 'group') return chats.filter((chat) => chat.isGroup && (!secondary || chat.name === secondary));
   if (primary === 'country') return chats.filter((chat) => chat.countryCode === secondary);
 
   return chats;
