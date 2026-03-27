@@ -92,9 +92,13 @@ async function downloadAttachmentAsFile(url) {
   }
 
   const blob = await response.blob();
-  const parsed = new URL(url, window.location.href);
-  const pathname = parsed.pathname.split('/').pop() || `attachment-${Date.now()}`;
-  const fileName = pathname.includes('.') ? pathname : `${pathname}.${blob.type.split('/')[1] || 'bin'}`;
+  let fileName = `attachment-${Date.now()}.${blob.type.split('/')[1] || 'bin'}`;
+
+  if (!String(url).startsWith('data:')) {
+    const parsed = new URL(url, window.location.href);
+    const pathname = parsed.pathname.split('/').pop() || `attachment-${Date.now()}`;
+    fileName = pathname.includes('.') ? pathname : `${pathname}.${blob.type.split('/')[1] || 'bin'}`;
+  }
 
   return new File([blob], fileName, {
     type: blob.type || 'application/octet-stream',
