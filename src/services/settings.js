@@ -1,4 +1,5 @@
-export const SETTINGS_KEY = 'waBulkSettings';
+export const SETTINGS_KEY = 'settings';
+const LEGACY_SETTINGS_KEY = 'waBulkSettings';
 
 export const DEFAULT_SETTINGS = {
   minDelayMs: 3000,
@@ -26,12 +27,12 @@ export function sanitizeSettings(input = {}) {
 }
 
 export async function loadSettings() {
-  const stored = await chrome.storage.local.get(SETTINGS_KEY);
-  return sanitizeSettings(stored[SETTINGS_KEY] || {});
+  const stored = await chrome.storage.local.get([SETTINGS_KEY, LEGACY_SETTINGS_KEY]);
+  return sanitizeSettings(stored[SETTINGS_KEY] || stored[LEGACY_SETTINGS_KEY] || {});
 }
 
 export async function saveSettings(input) {
-  const normalized = sanitizeSettings(input);
-  await chrome.storage.local.set({ [SETTINGS_KEY]: normalized });
-  return normalized;
+  const settings = sanitizeSettings(input);
+  await chrome.storage.local.set({ settings });
+  return settings;
 }

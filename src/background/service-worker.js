@@ -1,6 +1,7 @@
 import { randomBetween, wait } from '../utils/delay.js';
 import { applyTemplate, normalizePhone } from '../services/message-template.js';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, sanitizeSettings } from '../services/settings.js';
+import { ACTIONS, createMessage, getAction } from '../shared/actions.js';
 
 const state = {
   queue: [],
@@ -35,9 +36,9 @@ async function getWhatsAppTab() {
   return tabs[0];
 }
 
-async function sendToContent(payload) {
+async function sendToContent(message) {
   const tab = await getWhatsAppTab();
-  return chrome.tabs.sendMessage(tab.id, payload);
+  return chrome.tabs.sendMessage(tab.id, message);
 }
 
 function getProgress() {
@@ -56,12 +57,13 @@ async function persistState() {
 }
 
 async function broadcastProgress(latest = null) {
-  const payload = { type: 'PROGRESS_UPDATE', progress: getProgress(), latest };
+  const payload = createMessage(ACTIONS.UPDATE_PROGRESS, { progress: getProgress(), latest });
   try {
     await chrome.runtime.sendMessage(payload);
   } catch (_err) {
-    // popup/options can be closed
+    // popup/options can be closed.
   }
+
   await persistState();
 }
 
@@ -89,7 +91,7 @@ function transformQueueRows(rows = []) {
 
 async function startCampaign(rows = [], incomingSettings = {}) {
   state.settings = sanitizeSettings({ ...state.settings, ...incomingSettings });
-  await saveSettings(state.settings);
+  state.settings = await saveSettings(state.settings);
 
   state.queue = transformQueueRows(rows || []);
   state.currentIndex = 0;
@@ -119,8 +121,7 @@ async function processQueue() {
     }
 
     const item = state.queue[state.currentIndex];
-    const payload = {
-      type: 'SEND_MESSAGE',
+    const payload = createMessage(ACTIONS.SEND_MESSAGE, {
       data: {
         srNo: item.srNo,
         rowId: item.rowId,
@@ -130,12 +131,12 @@ async function processQueue() {
         attachmentSendingEnabled: state.settings.attachmentSendingEnabled,
         rawRow: item.raw || {}
       }
-    };
+    });
 
     try {
-      console.log('[WA CRM] Sending row', state.currentIndex + 1, payload.data);
+      console.log('[WA CRM][Background] ACTION:', ACTIONS.SEND_MESSAGE, payload.data);
       const result = await sendToContent(payload);
-      if (!result?.ok) throw new Error(result?.error || 'Unknown send error');
+      if (!result?.success) throw new Error(result?.error || 'Unknown send error');
 
       state.stats.sent += 1;
       state.currentIndex += 1;
@@ -185,81 +186,105 @@ async function processQueue() {
   }
 }
 
+async function loadDashboardRows() {
+  const stored = await chrome.storage.local.get('dashboardRows');
+  return Array.isArray(stored.dashboardRows) ? stored.dashboardRows : [];
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
-    switch (message.type) {
-      case 'GET_SETTINGS': {
-        sendResponse({ ok: true, settings: state.settings });
+    const action = getAction(message);
+    console.log('[WA CRM][Background] ACTION:', action, message);
+
+    switch (action) {
+      case ACTIONS.LOAD_SETTINGS: {
+        sendResponse({ success: true, settings: state.settings });
         break;
       }
-      case 'SAVE_SETTINGS': {
-        state.settings = await saveSettings(message.payload || {});
-        sendResponse({ ok: true, settings: state.settings });
+      case ACTIONS.SAVE_SETTINGS: {
+        state.settings = await saveSettings(message.settings || message.payload || {});
+        sendResponse({ success: true, settings: state.settings });
         break;
       }
-      case 'GET_PROGRESS': {
-        sendResponse({ ok: true, progress: getProgress() });
+      case ACTIONS.GET_PROGRESS: {
+        sendResponse({ success: true, progress: getProgress() });
         break;
       }
-      case 'GET_CHAT_SNAPSHOT': {
-        const result = await sendToContent({ type: 'GET_CHAT_SNAPSHOT' });
+      case ACTIONS.GET_CHAT_SNAPSHOT: {
+        const result = await sendToContent(createMessage(ACTIONS.GET_CHAT_SNAPSHOT));
         sendResponse(result);
         break;
       }
-      case 'SCRAPE_CONTACTS': {
-        const result = await sendToContent({ type: 'SCRAPE_CONTACTS', groupName: message.groupName || '' });
+      case ACTIONS.GET_GROUPS: {
+        const result = await sendToContent(createMessage(ACTIONS.GET_GROUPS));
         sendResponse(result);
         break;
       }
-      case 'OPEN_CHAT': {
-        const result = await sendToContent({ type: 'OPEN_CHAT', query: message.query || message.phone || '' });
+      case ACTIONS.FETCH_CONTACTS: {
+        const result = await sendToContent(
+          createMessage(ACTIONS.FETCH_CONTACTS, {
+            filter: message.filter || null,
+            chats: message.chats || []
+          })
+        );
         sendResponse(result);
         break;
       }
-      case 'START_CAMPAIGN': {
-        const progress = await startCampaign(message.payload?.rows || [], message.payload?.settings || {});
-        sendResponse({ ok: true, progress });
+      case ACTIONS.SCRAPE_GROUP: {
+        const result = await sendToContent(createMessage(ACTIONS.SCRAPE_GROUP, { groupName: message.groupName || '' }));
+        sendResponse(result);
         break;
       }
-      case 'START_CAMPAIGN_FROM_STORAGE': {
-        const stored = await chrome.storage.local.get('dashboardRows');
-        const storageRows = Array.isArray(stored.dashboardRows) ? stored.dashboardRows : [];
+      case ACTIONS.OPEN_CHAT: {
+        const result = await sendToContent(
+          createMessage(ACTIONS.OPEN_CHAT, { query: message.query || message.phone || '' })
+        );
+        sendResponse(result);
+        break;
+      }
+      case ACTIONS.START_AUTOMATION: {
+        const progress = await startCampaign(message.rows || message.payload?.rows || [], message.settings || message.payload?.settings || {});
+        sendResponse({ success: true, progress });
+        break;
+      }
+      case ACTIONS.START_CAMPAIGN_FROM_STORAGE: {
+        const storageRows = await loadDashboardRows();
         if (!storageRows.length) {
           throw new Error('No saved rows found. Open dashboard and add/import rows first.');
         }
-
         const progress = await startCampaign(storageRows, {});
-        sendResponse({ ok: true, progress });
+        sendResponse({ success: true, progress });
         break;
       }
-      case 'PAUSE_CAMPAIGN': {
+      case ACTIONS.PAUSE_AUTOMATION: {
         state.paused = true;
         await broadcastProgress({ status: 'paused' });
-        sendResponse({ ok: true });
+        sendResponse({ success: true });
         break;
       }
-      case 'RESUME_CAMPAIGN': {
+      case ACTIONS.RESUME_AUTOMATION: {
         if (state.running) {
           state.paused = false;
           await broadcastProgress({ status: 'resumed' });
           processQueue();
         }
-        sendResponse({ ok: true });
+        sendResponse({ success: true });
         break;
       }
-      case 'STOP_CAMPAIGN': {
+      case ACTIONS.STOP_AUTOMATION: {
         state.running = false;
         state.paused = false;
         await broadcastProgress({ status: 'stopped' });
-        sendResponse({ ok: true });
+        sendResponse({ success: true });
         break;
       }
-      default:
-        sendResponse({ ok: false, error: 'Unknown message type' });
+      default: {
+        sendResponse({ success: false, error: `Unknown message type: ${action || 'undefined'}` });
+      }
     }
   })().catch((error) => {
-    console.error('[WA CRM] Background error', error);
-    sendResponse({ ok: false, error: error.message });
+    console.error('[WA CRM][Background] Handler error', error);
+    sendResponse({ success: false, error: error.message });
   });
 
   return true;
@@ -267,7 +292,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 chrome.runtime.onInstalled.addListener(async () => {
   state.settings = await loadSettings();
-  await chrome.storage.local.set({ campaignState: getProgress() });
+  await chrome.storage.local.set({ settings: state.settings, campaignState: getProgress() });
 });
 
 chrome.runtime.onStartup.addListener(async () => {

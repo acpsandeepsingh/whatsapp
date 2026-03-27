@@ -1,5 +1,6 @@
 import { parseWorkbook, validatePhone } from '../services/xls-parser.js';
 import { DEFAULT_SETTINGS } from '../services/settings.js';
+import { ACTIONS, createMessage, getAction } from '../shared/actions.js';
 
 const STORAGE_KEY = 'dashboardRows';
 
@@ -142,12 +143,12 @@ function applyLiveStatusUpdate(latest) {
 }
 
 async function getSettingsFromBackground() {
-  const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
+  const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.LOAD_SETTINGS));
   return response?.settings || { ...DEFAULT_SETTINGS };
 }
 
 async function saveSettings() {
-  const payload = {
+  const settings = {
     minDelayMs: Number(ui.minDelayMs.value || DEFAULT_SETTINGS.minDelayMs),
     maxDelayMs: Number(ui.maxDelayMs.value || DEFAULT_SETTINGS.maxDelayMs),
     maxMessagesPerSession: Number(ui.maxMessagesPerSession.value || DEFAULT_SETTINGS.maxMessagesPerSession),
@@ -157,8 +158,8 @@ async function saveSettings() {
     defaultTemplate: ui.defaultTemplate.value || DEFAULT_SETTINGS.defaultTemplate
   };
 
-  const response = await chrome.runtime.sendMessage({ type: 'SAVE_SETTINGS', payload });
-  if (!response?.ok) {
+  const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.SAVE_SETTINGS, { settings }));
+  if (!response?.success) {
     setStatus(`Unable to save settings: ${response?.error || 'Unknown error'}`, true);
     return null;
   }
@@ -207,11 +208,7 @@ function refreshSecondaryFilter() {
     buildSecondaryOptions(chatSnapshot.groups || [], 'Choose group');
     return;
   }
-  if (primary === 'specific_label') {
-    buildSecondaryOptions(chatSnapshot.labels || [], 'Choose label');
-    return;
-  }
-  if (primary === 'specific_country') {
+  if (primary === 'country') {
     buildSecondaryOptions(chatSnapshot.countryCodes || [], 'Choose country code');
     return;
   }
@@ -220,41 +217,36 @@ function refreshSecondaryFilter() {
   ui.secondaryFilter.disabled = true;
 }
 
-function filteredRowsFromSnapshot() {
-  const primary = ui.primaryFilter.value;
-  const secondary = ui.secondaryFilter.value;
+async function filteredRowsFromSource() {
+  const response = await chrome.runtime.sendMessage(
+    createMessage(ACTIONS.FETCH_CONTACTS, {
+      filter: {
+        primary: ui.primaryFilter.value,
+        secondary: ui.secondaryFilter.value
+      }
+    })
+  );
 
-  const chats = chatSnapshot.chats || [];
-
-  if (!chats.length) {
-    setStatus('No chat snapshot data. Click Sync Chats first.', true);
+  if (!response?.success) {
+    setStatus(`Filter failed: ${response?.error || 'Unknown error'}`, true);
     return [];
   }
 
-  if (primary === 'all_chats' || primary === 'all_contacts') {
-    return chats;
-  }
-  if (primary === 'unread_chats') {
-    return chats.filter((chat) => Number(chat.unreadCount) > 0);
-  }
-  if (primary === 'read_chats') {
-    return chats.filter((chat) => Number(chat.unreadCount) === 0);
-  }
-  if (primary === 'specific_group') {
-    return chats.filter((chat) => chat.isGroup && chat.name === secondary);
-  }
-  if (primary === 'specific_label') {
-    return chats.filter((chat) => (chat.labels || []).includes(secondary));
-  }
-  if (primary === 'specific_country') {
-    return chats.filter((chat) => chat.countryCode === secondary);
+  if (response.snapshot) {
+    chatSnapshot = {
+      chats: response.snapshot.chats || [],
+      groups: response.snapshot.groups || [],
+      labels: response.snapshot.labels || [],
+      countryCodes: response.snapshot.countryCodes || []
+    };
+    refreshSecondaryFilter();
   }
 
-  return chats;
+  return response.data || [];
 }
 
 async function applySelectedFilterToTable() {
-  const filtered = filteredRowsFromSnapshot();
+  const filtered = await filteredRowsFromSource();
   if (!filtered.length) {
     setStatus('No chats matched selected filter.', true);
     return;
@@ -282,8 +274,8 @@ async function applySelectedFilterToTable() {
 }
 
 async function syncChatsSnapshot() {
-  const response = await chrome.runtime.sendMessage({ type: 'GET_CHAT_SNAPSHOT' });
-  if (!response?.ok) {
+  const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.GET_CHAT_SNAPSHOT));
+  if (!response?.success) {
     setStatus(`Sync failed: ${response?.error || 'Unknown error'}`, true);
     return;
   }
@@ -304,17 +296,17 @@ async function syncChatsSnapshot() {
 async function scrapeSelectedGroup() {
   const groupName = ui.secondaryFilter.value;
   if (ui.primaryFilter.value !== 'specific_group' || !groupName) {
-    setStatus('Select "From Specific Group" and choose a group first.', true);
+    setStatus('Select "Specific Group" and choose a group first.', true);
     return;
   }
 
-  const response = await chrome.runtime.sendMessage({ type: 'SCRAPE_CONTACTS', groupName });
-  if (!response?.ok) {
+  const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.SCRAPE_GROUP, { groupName }));
+  if (!response?.success) {
     setStatus(`Group scrape failed: ${response?.error || 'Unknown error'}`, true);
     return;
   }
 
-  const contacts = response.contacts || [];
+  const contacts = response.data || [];
   if (!contacts.length) {
     setStatus('No participant numbers found in selected group.', true);
     return;
@@ -359,12 +351,14 @@ async function startCampaign() {
   renderRows();
   await saveRows();
 
-  const response = await chrome.runtime.sendMessage({
-    type: 'START_CAMPAIGN',
-    payload: { rows: validRows, settings }
-  });
+  const response = await chrome.runtime.sendMessage(
+    createMessage(ACTIONS.START_AUTOMATION, {
+      rows: validRows,
+      settings
+    })
+  );
 
-  if (!response?.ok) {
+  if (!response?.success) {
     setStatus(`Start failed: ${response?.error || 'Unknown error'}`, true);
     return;
   }
@@ -472,12 +466,12 @@ ui.importBtn.addEventListener('click', async () => {
 });
 
 ui.startBtn.addEventListener('click', startCampaign);
-ui.pauseBtn.addEventListener('click', async () => chrome.runtime.sendMessage({ type: 'PAUSE_CAMPAIGN' }));
-ui.resumeBtn.addEventListener('click', async () => chrome.runtime.sendMessage({ type: 'RESUME_CAMPAIGN' }));
-ui.stopBtn.addEventListener('click', async () => chrome.runtime.sendMessage({ type: 'STOP_CAMPAIGN' }));
+ui.pauseBtn.addEventListener('click', async () => chrome.runtime.sendMessage(createMessage(ACTIONS.PAUSE_AUTOMATION)));
+ui.resumeBtn.addEventListener('click', async () => chrome.runtime.sendMessage(createMessage(ACTIONS.RESUME_AUTOMATION)));
+ui.stopBtn.addEventListener('click', async () => chrome.runtime.sendMessage(createMessage(ACTIONS.STOP_AUTOMATION)));
 ui.checkStatusBtn.addEventListener('click', async () => {
-  const response = await chrome.runtime.sendMessage({ type: 'GET_PROGRESS' });
-  if (!response?.ok) {
+  const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.GET_PROGRESS));
+  if (!response?.success) {
     setStatus(`Status error: ${response?.error || 'Unknown error'}`, true);
     return;
   }
@@ -493,8 +487,25 @@ ui.scrapeGroupBtn.addEventListener('click', scrapeSelectedGroup);
 ui.primaryFilter.addEventListener('change', refreshSecondaryFilter);
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'PROGRESS_UPDATE') {
+  const action = getAction(message);
+  console.log('[WA CRM][Options] ACTION:', action, message);
+
+  if (action === ACTIONS.UPDATE_PROGRESS) {
     renderProgress(message.progress, message.latest);
+  }
+});
+
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== 'local') return;
+
+  if (changes.settings?.newValue) {
+    renderSettings(changes.settings.newValue);
+    setStatus('Settings synchronized from storage.');
+  }
+
+  if (changes.dashboardRows?.newValue) {
+    rows = Array.isArray(changes.dashboardRows.newValue) ? changes.dashboardRows.newValue : rows;
+    renderRows();
   }
 });
 
@@ -505,8 +516,8 @@ chrome.runtime.onMessage.addListener((message) => {
   const settings = await getSettingsFromBackground();
   renderSettings(settings);
 
-  const progressResponse = await chrome.runtime.sendMessage({ type: 'GET_PROGRESS' });
-  if (progressResponse?.ok) {
+  const progressResponse = await chrome.runtime.sendMessage(createMessage(ACTIONS.GET_PROGRESS));
+  if (progressResponse?.success) {
     renderProgress(progressResponse.progress);
   }
 
