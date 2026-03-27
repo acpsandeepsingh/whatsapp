@@ -1,11 +1,3 @@
-function normalizeHeaders(row) {
-  const normalized = {};
-  Object.entries(row).forEach(([key, value]) => {
-    normalized[String(key || '').trim().toLowerCase()] = value;
-  });
-  return normalized;
-}
-
 function toDigits(value) {
   return String(value ?? '').replace(/[^\d]/g, '');
 }
@@ -19,14 +11,9 @@ export function validatePhone(value) {
   return isValidPhone(value);
 }
 
-function pickField(row, aliases = []) {
-  for (const key of aliases) {
-    const value = row[key.toLowerCase()];
-    if (value !== undefined && value !== null && String(value).trim() !== '') {
-      return String(value).trim();
-    }
-  }
-  return '';
+function normalizeCell(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim();
 }
 
 export async function parseWorkbook(file) {
@@ -40,31 +27,39 @@ export async function parseWorkbook(file) {
   const sheet = workbook.Sheets[sheetName];
 
   const rows = window.XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
     defval: '',
-    raw: false
+    raw: true
   });
 
-  return rows.map((inputRow, index) => {
-    const row = normalizeHeaders(inputRow);
-    const srNo = pickField(row, ['sr no', 'srno', 'serial no', 'serial']) || String(index + 1);
-    const mobileNumber = pickField(row, ['mobile number', 'mobile', 'phone', 'number', 'whatsapp number']);
-    const name = pickField(row, ['name', 'contact name', 'full name']);
-    const messageTemplate = pickField(row, ['message template', 'message', 'template']);
-    const attachmentUrl = pickField(row, ['attachment url', 'attachment', 'file url', 'media url']);
+  const output = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = Array.isArray(rows[index]) ? rows[index] : [];
+    const isCompletelyEmpty = row.every((cell) => normalizeCell(cell) === '');
+    if (isCompletelyEmpty) continue;
+
+    const srNo = normalizeCell(row[0]) || String(output.length + 1);
+    const mobileNumber = toDigits(row[1]);
+    const messageTemplate = normalizeCell(row[2]);
 
     if (!mobileNumber) {
-      throw new Error(`Row ${index + 2}: Mobile Number is required.`);
+      throw new Error(`Row ${index + 1}: mobile number is required.`);
     }
 
-    return {
+    output.push({
       id: `row-${index}-${Date.now()}`,
       srNo,
       mobileNumber,
-      name,
+      name: '',
       messageTemplate,
-      attachmentUrl,
+      attachmentUrl: '',
       isValidPhone: isValidPhone(mobileNumber),
-      raw: inputRow
-    };
-  });
+      raw: {
+        rowNumber: index + 1,
+        source: row
+      }
+    });
+  }
+
+  return output;
 }

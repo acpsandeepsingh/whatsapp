@@ -58,14 +58,8 @@ function refreshSecondaryFilter() {
     return;
   }
 
-  if (primary === 'specific_group') {
+  if (primary === 'group') {
     buildSecondaryOptions(chatSnapshot.groups || [], 'Choose group');
-    return;
-  }
-
-  if (primary === 'label') {
-    ui.secondaryFilter.innerHTML = '<option value="">No labels available</option>';
-    ui.secondaryFilter.disabled = true;
     return;
   }
 
@@ -80,7 +74,7 @@ function refreshSecondaryFilter() {
 
 async function ensureActiveWhatsAppTab() {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const isValidTab = Boolean(activeTab?.id && activeTab.url?.startsWith('https://web.whatsapp.com/'));
+  const isValidTab = Boolean(activeTab?.id && /^https:\/\/web\.whatsapp\.com(\/|$)/.test(String(activeTab.url || '')));
   if (isValidTab) return activeTab;
   throw new Error('Open WhatsApp Web in the active tab, then try again.');
 }
@@ -144,7 +138,10 @@ async function fetchContacts() {
   ui.latestLog.textContent = JSON.stringify(
     {
       action: ACTIONS.FETCH_CONTACTS,
-      filter: payload.filter,
+      filter: {
+        primary: ui.primaryFilter.value,
+        secondary: ui.secondaryFilter.value
+      },
       contacts: response.data?.slice(0, 8) || []
     },
     null,
