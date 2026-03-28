@@ -44,6 +44,7 @@ async function getWhatsAppTab() {
 
 function sendTabMessage(tabId, message) {
   return new Promise((resolve, reject) => {
+    console.log('[WA CRM][Background] -> Content', { tabId, action: getAction(message), message });
     chrome.tabs.sendMessage(tabId, message, (response) => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
@@ -53,27 +54,29 @@ function sendTabMessage(tabId, message) {
         reject(new Error('No response from content script.'));
         return;
       }
+      console.log('[WA CRM][Background] <- Content', { tabId, action: getAction(message), response });
       resolve(response);
     });
   });
 }
 
 async function ensureContentReady(tabId) {
-  try {
-    await sendTabMessage(tabId, createMessage(ACTIONS.PING));
-    return;
-  } catch (error) {
-    if (!String(error.message || '').includes('Receiving end does not exist')) {
-      throw error;
-    }
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab?.id || !isWhatsAppWebUrl(tab.url)) {
+    throw new Error('Selected tab is not WhatsApp Web. Open https://web.whatsapp.com first.');
   }
 
+  console.log('[WA CRM][Background] Injecting content script into tab:', tabId);
   await chrome.scripting.executeScript({
     target: { tabId },
     files: ['src/content/whatsapp-content.js']
   });
-  await wait(300);
-  await sendTabMessage(tabId, createMessage(ACTIONS.PING));
+  await wait(600);
+
+  const pingResponse = await sendTabMessage(tabId, createMessage(ACTIONS.PING));
+  if (!pingResponse?.success) {
+    throw new Error(pingResponse?.error || 'Content script ping failed after injection.');
+  }
 }
 
 async function sendToContent(message) {

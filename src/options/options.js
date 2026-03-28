@@ -465,6 +465,12 @@ ui.importBtn.addEventListener('click', async () => {
     }
 
     const parsed = await parseWorkbook(file);
+    console.log('[WA CRM][Options] Parsed XLS rows:', parsed);
+    if (!parsed.length) {
+      setStatus('Import finished, but 0 valid contacts were found. Check mobile number column.', true);
+      return;
+    }
+
     rows = parsed.map((row, index) => ({
       ...row,
       id: row.id || uid(),
