@@ -16,7 +16,8 @@ const state = {
     retries: 0
   },
   activeTabId: null,
-  settings: { ...DEFAULT_SETTINGS }
+  settings: { ...DEFAULT_SETTINGS },
+  injectedTabs: new Set()
 };
 
 function isWhatsAppWebUrl(url) {
@@ -60,10 +61,32 @@ function sendTabMessage(tabId, message) {
   });
 }
 
+async function tryPingContent(tabId) {
+  try {
+    const pingResponse = await sendTabMessage(tabId, createMessage(ACTIONS.PING));
+    return Boolean(pingResponse?.success);
+  } catch (_error) {
+    return false;
+  }
+}
+
 async function ensureContentReady(tabId) {
   const tab = await chrome.tabs.get(tabId);
   if (!tab?.id || !isWhatsAppWebUrl(tab.url)) {
+    state.injectedTabs.delete(tabId);
     throw new Error('Selected tab is not WhatsApp Web. Open https://web.whatsapp.com first.');
+  }
+
+  if (state.injectedTabs.has(tabId)) {
+    const isReady = await tryPingContent(tabId);
+    if (isReady) return;
+    state.injectedTabs.delete(tabId);
+  }
+
+  const wasAlreadyReady = await tryPingContent(tabId);
+  if (wasAlreadyReady) {
+    state.injectedTabs.add(tabId);
+    return;
   }
 
   console.log('[WA CRM][Background] Injecting content script into tab:', tabId);
@@ -71,12 +94,14 @@ async function ensureContentReady(tabId) {
     target: { tabId },
     files: ['src/content/whatsapp-content.js']
   });
-  await wait(600);
+  await wait(350);
 
   const pingResponse = await sendTabMessage(tabId, createMessage(ACTIONS.PING));
   if (!pingResponse?.success) {
     throw new Error(pingResponse?.error || 'Content script ping failed after injection.');
   }
+
+  state.injectedTabs.add(tabId);
 }
 
 async function sendToContent(message) {
@@ -337,6 +362,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   });
 
   return true;
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  state.injectedTabs.delete(tabId);
+  if (state.activeTabId === tabId) {
+    state.activeTabId = null;
+  }
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') {
+    state.injectedTabs.delete(tabId);
+  }
 });
 
 chrome.runtime.onInstalled.addListener(async () => {

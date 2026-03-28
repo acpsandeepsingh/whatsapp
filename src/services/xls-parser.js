@@ -16,6 +16,35 @@ function normalizeCell(value) {
   return String(value).trim();
 }
 
+function normalizeHeader(value) {
+  return normalizeCell(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function detectColumnIndexes(headerRow = []) {
+  const normalized = headerRow.map(normalizeHeader);
+
+  const findColumn = (patterns = [], fallbackIndex = -1) => {
+    const index = normalized.findIndex((value) => patterns.some((pattern) => pattern.test(value)));
+    return index >= 0 ? index : fallbackIndex;
+  };
+
+  const srNoIndex = findColumn([/^sr(_?no)?$/, /^serial(_?no)?$/, /^s_?no$/], 0);
+  const mobileIndex = findColumn([/mobile/, /phone/, /whatsapp/, /^contact(_?number)?$/, /^number$/], 1);
+  const nameIndex = findColumn([/^name$/, /contact_name/, /^customer$/], -1);
+  const messageIndex = findColumn([/message/, /^msg$/, /template/, /text/], 2);
+  const attachmentIndex = findColumn([/attachment/, /media/, /file/, /document/, /url/], 3);
+
+  return { srNoIndex, mobileIndex, nameIndex, messageIndex, attachmentIndex, normalized };
+}
+
+function isHeaderRow(row = []) {
+  const joined = row.map(normalizeHeader).filter(Boolean).join('|');
+  return /mobile|phone|whatsapp|message|template|sr/.test(joined);
+}
+
 export async function parseWorkbook(file) {
   if (!window.XLSX) {
     throw new Error('SheetJS (XLSX) is not loaded.');
@@ -32,33 +61,31 @@ export async function parseWorkbook(file) {
     raw: true
   });
 
+  if (!rows.length) {
+    return [];
+  }
+
+  const headerDetected = isHeaderRow(rows[0]);
+  const indexes = detectColumnIndexes(rows[0]);
+
+  if (headerDetected) {
+    console.log('[WA CRM][XLS] Header row detected and skipped:', rows[0], indexes);
+  }
+
   const output = [];
   for (let index = 0; index < rows.length; index += 1) {
+    if (headerDetected && index === 0) continue;
+
     const row = Array.isArray(rows[index]) ? rows[index] : [];
     const isCompletelyEmpty = row.every((cell) => normalizeCell(cell) === '');
     if (isCompletelyEmpty) continue;
 
-    // Expected format:
-    // [0] Sr No | [1] Mobile Number | [2] Message
-    // Skip header row even when values are styled/capitalized differently.
-    if (index === 0) {
-      const headerSr = normalizeCell(row[0]).toLowerCase();
-      const headerMobile = normalizeCell(row[1]).toLowerCase();
-      const headerMessage = normalizeCell(row[2]).toLowerCase();
-      const hasExpectedHeaders =
-        headerSr.includes('sr') &&
-        headerMobile.includes('mobile') &&
-        (headerMessage.includes('message') || headerMessage.includes('msg'));
-      if (hasExpectedHeaders) {
-        console.log('[WA CRM][XLS] Header row detected and skipped:', row);
-        continue;
-      }
-    }
-
-    const srNo = normalizeCell(row[0]) || String(output.length + 1);
-    const mobileRaw = normalizeCell(row[1]);
-    const mobileNumber = toDigits(String(mobileRaw));
-    const messageTemplate = normalizeCell(row[2]);
+    const srNo = normalizeCell(row[indexes.srNoIndex]) || String(output.length + 1);
+    const mobileRaw = normalizeCell(row[indexes.mobileIndex]);
+    const mobileNumber = toDigits(mobileRaw);
+    const name = indexes.nameIndex >= 0 ? normalizeCell(row[indexes.nameIndex]) : '';
+    const messageTemplate = normalizeCell(row[indexes.messageIndex]);
+    const attachmentUrl = normalizeCell(row[indexes.attachmentIndex]);
 
     if (!mobileNumber || !isValidPhone(mobileNumber)) {
       console.warn('[WA CRM][XLS] Ignoring invalid row:', {
@@ -75,9 +102,9 @@ export async function parseWorkbook(file) {
       id: `row-${index}-${Date.now()}`,
       srNo,
       mobileNumber,
-      name: '',
+      name,
       messageTemplate,
-      attachmentUrl: '',
+      attachmentUrl,
       isValidPhone: isValidPhone(mobileNumber),
       raw: {
         rowNumber: index + 1,
@@ -91,7 +118,9 @@ export async function parseWorkbook(file) {
 
   console.log('[WA CRM][XLS] Import summary:', {
     totalRows: rows.length,
-    importedRows: output.length
+    importedRows: output.length,
+    headerDetected,
+    indexes
   });
 
   return output;
