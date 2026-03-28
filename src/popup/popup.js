@@ -87,6 +87,12 @@ function buildSecondaryOptions(values, placeholder = 'Select value') {
 function refreshSecondaryFilter() {
   const primary = ui.primaryFilter.value;
 
+  if (primary === 'popup_contacts') {
+    ui.secondaryFilter.innerHTML = '<option value="">Not required</option>';
+    ui.secondaryFilter.disabled = true;
+    return;
+  }
+
   if (primary === 'all_contacts') {
     buildSecondaryOptions(
       CHAT_SCOPE_OPTIONS.map((option) => option.value),
@@ -185,7 +191,7 @@ async function startSendingFromDashboardRows() {
 }
 
 async function fetchContacts() {
-  setStatus('Sending...');
+  setStatus('Capturing contacts...');
 
   try {
     await ensureActiveWhatsAppTab();
@@ -195,14 +201,17 @@ async function fetchContacts() {
     return;
   }
 
-  if (!(await fetchSnapshot())) return;
-
-  const payload = createMessage(ACTIONS.FETCH_CONTACTS, {
-    filter: {
-      primary: ui.primaryFilter.value,
-      secondary: ui.secondaryFilter.value
-    }
-  });
+  const selectedPrimary = ui.primaryFilter.value;
+  if (selectedPrimary !== 'popup_contacts' && !(await fetchSnapshot())) return;
+  const payload =
+    selectedPrimary === 'popup_contacts'
+      ? createMessage(ACTIONS.SCRAPE_GROUP)
+      : createMessage(ACTIONS.FETCH_CONTACTS, {
+          filter: {
+            primary: selectedPrimary,
+            secondary: ui.secondaryFilter.value
+          }
+        });
 
   const response = await chrome.runtime.sendMessage(payload);
 
@@ -215,12 +224,16 @@ async function fetchContacts() {
   const count = response?.data?.length || 0;
   latestFetchedContacts = response.data || [];
   ui.downloadContactsBtn.classList.toggle('hidden', !count);
-  setStatus(`Success: ${count} contacts`);
+  setStatus(
+    selectedPrimary === 'popup_contacts'
+      ? `Popup capture complete: ${count} contacts`
+      : `Success: ${count} contacts`
+  );
   ui.latestLog.textContent = JSON.stringify(
     {
-      action: ACTIONS.FETCH_CONTACTS,
+      action: selectedPrimary === 'popup_contacts' ? ACTIONS.SCRAPE_GROUP : ACTIONS.FETCH_CONTACTS,
       filter: {
-        primary: ui.primaryFilter.value,
+        primary: selectedPrimary,
         secondary: ui.secondaryFilter.value
       },
       contacts: response.data?.slice(0, 8) || []
@@ -230,14 +243,19 @@ async function fetchContacts() {
   );
 }
 
-ui.openDashboardBtn.addEventListener('click', async () => {
-  await chrome.runtime.openOptionsPage();
-});
+// Message send/dashboard flow temporarily disabled as requested.
+// ui.openDashboardBtn.addEventListener('click', async () => {
+//   await chrome.runtime.openOptionsPage();
+// });
 
 ui.fetchContactsBtn.addEventListener('click', fetchContacts);
 ui.downloadContactsBtn?.addEventListener('click', downloadContactFormatWithName);
-ui.startFromStorageBtn?.addEventListener('click', startSendingFromDashboardRows);
+// ui.startFromStorageBtn?.addEventListener('click', startSendingFromDashboardRows);
 ui.primaryFilter.addEventListener('change', async () => {
+  if (ui.primaryFilter.value !== 'popup_contacts' && !chatSnapshot.groups.length && !chatSnapshot.countryCodes.length) {
+    await fetchSnapshot();
+  }
+
   if (ui.primaryFilter.value === 'group') {
     await fetchGroupsForSecondaryFilter();
     return;
@@ -265,6 +283,6 @@ chrome.runtime.onMessage.addListener((message) => {
 
 (async function init() {
   await loadSettings();
-  await fetchSnapshot();
+  ui.primaryFilter.value = 'popup_contacts';
   refreshSecondaryFilter();
 })();
