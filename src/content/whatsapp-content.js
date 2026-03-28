@@ -62,7 +62,7 @@ const SELECTORS = {
     'div[data-testid="group-participants"]',
     'div[role="dialog"] [tabindex="-1"]'
   ],
-  participantRows: ['[aria-label*="Participants"] [role="listitem"]', 'div[data-testid="cell-frame-container"]', '[role="listitem"]'],
+  participantRows: ['[aria-label*="Participants"] [role="listitem"]', 'div[data-testid="group-participants"] [role="listitem"]', '[role="listitem"]'],
   closePanelButtons: ['button[aria-label="Back"]', 'span[data-icon="back"]', 'button[title="Back"]']
 };
 SELECTORS.filterTabs = {
@@ -389,9 +389,10 @@ function filterChats(snapshot = {}, filter = {}) {
   const secondary = filter.secondary || '';
 
   if (primary === 'all_contacts') {
-    if (secondary === 'unread_chats') return chats.filter((chat) => Number(chat.unreadCount) > 0);
-    if (secondary === 'read_chats') return chats.filter((chat) => Number(chat.unreadCount) === 0);
-    return chats;
+    const contactChats = chats.filter((chat) => !chat.isGroup && chat.phone);
+    if (secondary === 'unread_chats') return contactChats.filter((chat) => Number(chat.unreadCount) > 0);
+    if (secondary === 'read_chats') return contactChats.filter((chat) => Number(chat.unreadCount) === 0);
+    return contactChats;
   }
   if (primary === 'group') return chats.filter((chat) => chat.isGroup && (!secondary || chat.name === secondary));
   if (primary === 'country') return chats.filter((chat) => chat.countryCode === secondary);
@@ -521,6 +522,20 @@ function readContactFromRow(row) {
   };
 }
 
+function isValidParticipantRow(row) {
+  if (!(row instanceof Element)) return false;
+  if (row.querySelector('[data-icon="group"], [data-testid*="group"]')) return false;
+
+  const text = (row.textContent || '').replace(/\s+/g, ' ').trim();
+  if (!text) return false;
+
+  const phone = extractPhoneFromText(text);
+  if (phone) return true;
+
+  const words = text.split(' ').filter(Boolean);
+  return words.length >= 1 && words.length <= 8;
+}
+
 function isLikelyPhoneText(value) {
   const digits = normalizePhone(value);
   return digits.length >= 7;
@@ -589,16 +604,20 @@ async function scrapeGroupContacts(groupName) {
     await openGroupInfo(groupName);
   }
 
-  const panel = (await waitForElement(SELECTORS.participantsContainer, 12000)) || document.body;
+  const panel = await waitForElement(SELECTORS.participantsContainer, 12000);
+  if (!panel) {
+    throw new Error('Participants list not found. Open a group info panel before scraping.');
+  }
   const discovered = new Map();
 
   let unchangedScrolls = 0;
   let previousCount = 0;
 
   for (let i = 0; i < 45; i += 1) {
-    const rows = queryAllWithFallback(SELECTORS.participantRows, panel);
+    const rows = queryAllWithFallback(SELECTORS.participantRows, panel).filter(isValidParticipantRow);
     rows.forEach((row) => {
       const contact = readContactFromRow(row);
+      if (!contact.name || contact.name === 'Unknown') return;
       const key = `${contact.name}|${contact.phone || ''}`;
       if (!discovered.has(key)) {
         discovered.set(key, { ...contact });
@@ -620,9 +639,9 @@ async function scrapeGroupContacts(groupName) {
 
   const unresolvedContacts = [...discovered.entries()].filter(([, contact]) => !contact.phone);
   for (const [key, contact] of unresolvedContacts) {
-    const rows = queryAllWithFallback(SELECTORS.participantRows, panel).filter((row) =>
-      (row.textContent || '').includes(contact.name)
-    );
+    const rows = queryAllWithFallback(SELECTORS.participantRows, panel)
+      .filter(isValidParticipantRow)
+      .filter((row) => (row.textContent || '').includes(contact.name));
     const matchedRow = rows[0];
     if (!matchedRow) continue;
 
