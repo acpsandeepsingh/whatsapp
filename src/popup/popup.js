@@ -253,6 +253,10 @@ ui.fetchContactsBtn.addEventListener('click', fetchContacts);
 ui.downloadContactsBtn?.addEventListener('click', downloadContactFormatWithName);
 // ui.startFromStorageBtn?.addEventListener('click', startSendingFromDashboardRows);
 ui.primaryFilter.addEventListener('change', async () => {
+  if (ui.primaryFilter.value !== 'popup_contacts' && !chatSnapshot.groups.length && !chatSnapshot.countryCodes.length) {
+    await fetchSnapshot();
+  }
+
   if (ui.primaryFilter.value === 'group') {
     await fetchGroupsForSecondaryFilter();
     return;
