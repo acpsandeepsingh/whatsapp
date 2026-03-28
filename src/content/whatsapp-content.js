@@ -22,8 +22,13 @@ const ACTIONS = Object.freeze({
   RESUME_AUTOMATION: 'RESUME_AUTOMATION',
   STOP_AUTOMATION: 'STOP_AUTOMATION',
   GET_CHAT_SNAPSHOT: 'GET_CHAT_SNAPSHOT',
-  PING: 'PING'
+  PING: 'PING',
+  STOP_CONTACT_FETCH: 'STOP_CONTACT_FETCH'
 });
+
+const contactFetchRuntime = {
+  stopRequested: false
+};
 
 function getAction(message = {}) {
   return message.action || message.type || '';
@@ -287,7 +292,7 @@ function detectChatTypeFromRow(row) {
   };
 }
 
-async function collectSidebarRows(paneSide) {
+async function collectSidebarRows(paneSide, shouldStop = () => false) {
   const scrollContainer =
     [paneSide, ...paneSide.querySelectorAll('div')]
       .filter((node) => node && node.scrollHeight > node.clientHeight + 20)
@@ -304,6 +309,8 @@ async function collectSidebarRows(paneSide) {
   await wait(300);
 
   for (let i = 0; i < maxIterations; i += 1) {
+    if (shouldStop()) break;
+
     const visibleRows = queryAllWithFallback(SELECTORS.sidebarChatRows, paneSide).filter((row) => row.textContent?.trim());
 
     visibleRows.forEach((row) => {
@@ -340,7 +347,7 @@ async function collectSidebarRows(paneSide) {
 
 async function gatherSidebarData() {
   const { paneSide } = await ensureWhatsAppReady();
-  const chats = await collectSidebarRows(paneSide);
+  const chats = await collectSidebarRows(paneSide, () => contactFetchRuntime.stopRequested);
   const groups = chats.filter((c) => c.isGroup).map((c) => c.name).sort((a, b) => a.localeCompare(b));
   const labels = [];
   const countryCodes = [...new Set(chats.map((c) => c.countryCode).filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -796,6 +803,8 @@ async function scrapeGroupContacts(groupName, options = {}) {
   let keepCurrentContextMisses = 0;
 
   for (let i = 0; i < 240; i += 1) {
+    if (contactFetchRuntime.stopRequested) break;
+
     const activePopup = getWaPopoverBucketDialog() || getSearchMembersPopup();
     const activePanel = activePopup || panel;
     if (!activePanel) {
@@ -847,6 +856,8 @@ async function scrapeGroupContacts(groupName, options = {}) {
   if (resolveMissingPhones) {
     const unresolvedContacts = [...discovered.entries()].filter(([, contact]) => !contact.phone);
     for (const [key, contact] of unresolvedContacts) {
+      if (contactFetchRuntime.stopRequested) break;
+
       const currentPanel = getWaPopoverBucketDialog() || getSearchMembersPopup() || panel;
       const rows = queryAllWithFallback(SELECTORS.participantRows, currentPanel)
         .filter(isValidParticipantRow)
@@ -914,6 +925,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case ACTIONS.PING:
         sendResponse({ success: true });
         break;
+      case ACTIONS.STOP_CONTACT_FETCH:
+        contactFetchRuntime.stopRequested = true;
+        sendResponse({ success: true, stopping: true });
+        break;
       case ACTIONS.GET_CHAT_SNAPSHOT: {
         const snapshot = await gatherSidebarDataForFilter({ primary: 'all_contacts', secondary: 'all_chats' });
         sendResponse({ success: true, ...snapshot });
@@ -925,17 +940,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.FETCH_CONTACTS: {
+        contactFetchRuntime.stopRequested = false;
         const requestedFilter = message.filter || {};
         const snapshot = await gatherSidebarDataForFilter(requestedFilter);
         const enrichedChats = await enrichDirectChatsWithProfilePhones(snapshot.chats || [], requestedFilter);
         const enrichedSnapshot = { ...snapshot, chats: enrichedChats };
         const contacts = filterChats(enrichedSnapshot, requestedFilter);
-        sendResponse({ success: true, data: contacts, snapshot: enrichedSnapshot });
+        sendResponse({
+          success: true,
+          data: contacts,
+          snapshot: enrichedSnapshot,
+          stopped: contactFetchRuntime.stopRequested
+        });
         break;
       }
       case ACTIONS.SCRAPE_GROUP: {
+        contactFetchRuntime.stopRequested = false;
         const contacts = await scrapeGroupContacts(message.groupName || '', { resolveMissingPhones: false });
-        sendResponse({ success: true, data: contacts });
+        sendResponse({ success: true, data: contacts, stopped: contactFetchRuntime.stopRequested });
         break;
       }
       case ACTIONS.OPEN_CHAT: {

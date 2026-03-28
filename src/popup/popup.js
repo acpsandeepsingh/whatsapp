@@ -265,6 +265,8 @@ async function fetchContacts() {
   setStatus(
     response?.recovered
       ? `Recovered running fetch: ${count} contacts`
+      : response?.stopped
+        ? `Fetch stopped: ${count} contacts captured`
       : selectedPrimary === 'popup_contacts'
         ? `Popup capture complete: ${count} contacts`
         : `Success: ${count} contacts`
@@ -273,6 +275,7 @@ async function fetchContacts() {
     {
       action: selectedPrimary === 'popup_contacts' ? ACTIONS.SCRAPE_GROUP : ACTIONS.FETCH_CONTACTS,
       recovered: Boolean(response?.recovered),
+      stopped: Boolean(response?.stopped),
       filter: {
         primary: selectedPrimary,
         secondary: ui.secondaryFilter.value
@@ -314,9 +317,41 @@ async function restoreRunningOrPreviousState() {
   }
 }
 
+async function stopFetchAndClosePopup() {
+  ui.closePopupBtn.disabled = true;
+  try {
+    const stateResponse = await chrome.runtime.sendMessage(createMessage(ACTIONS.GET_CONTACT_FETCH_STATE));
+    if (stateResponse?.success && stateResponse.running) {
+      setStatus('Stopping capture and saving collected contacts...');
+      const stopResponse = await chrome.runtime.sendMessage(createMessage(ACTIONS.STOP_CONTACT_FETCH));
+      const recoveredResult = stopResponse?.result;
+      if (recoveredResult?.success && Array.isArray(recoveredResult.data)) {
+        latestFetchedContacts = recoveredResult.data;
+        ui.downloadContactsBtn.classList.toggle('hidden', !latestFetchedContacts.length);
+        setStatus(`Fetch stopped: ${latestFetchedContacts.length} contacts captured`);
+        ui.latestLog.textContent = JSON.stringify(
+          {
+            action: recoveredResult.action,
+            stopped: true,
+            contacts: recoveredResult.data.slice(0, 8)
+          },
+          null,
+          2
+        );
+        await persistPopupState();
+      }
+    }
+  } catch (error) {
+    setStatus(`Unable to stop running fetch: ${error.message}`, true);
+    await persistPopupState();
+  } finally {
+    window.close();
+  }
+}
+
 ui.fetchContactsBtn.addEventListener('click', fetchContacts);
 ui.downloadContactsBtn?.addEventListener('click', downloadContactFormatWithName);
-ui.closePopupBtn?.addEventListener('click', () => window.close());
+ui.closePopupBtn?.addEventListener('click', stopFetchAndClosePopup);
 
 ui.primaryFilter.addEventListener('change', async () => {
   if (ui.primaryFilter.value !== 'popup_contacts' && !chatSnapshot.groups.length && !chatSnapshot.countryCodes.length) {
