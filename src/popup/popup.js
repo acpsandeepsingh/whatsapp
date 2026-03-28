@@ -149,6 +149,17 @@ async function fetchSnapshot() {
   return true;
 }
 
+async function fetchGroupsForSecondaryFilter() {
+  const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.GET_GROUPS));
+  if (!response?.success) {
+    setStatus(`Unable to load groups: ${response?.error || 'Unknown error'}`, true);
+    return;
+  }
+
+  chatSnapshot.groups = response.groups || [];
+  refreshSecondaryFilter();
+}
+
 
 async function startSendingFromDashboardRows() {
   setStatus('Starting campaign...');
@@ -226,7 +237,13 @@ ui.openDashboardBtn.addEventListener('click', async () => {
 ui.fetchContactsBtn.addEventListener('click', fetchContacts);
 ui.downloadContactsBtn?.addEventListener('click', downloadContactFormatWithName);
 ui.startFromStorageBtn?.addEventListener('click', startSendingFromDashboardRows);
-ui.primaryFilter.addEventListener('change', refreshSecondaryFilter);
+ui.primaryFilter.addEventListener('change', async () => {
+  if (ui.primaryFilter.value === 'group') {
+    await fetchGroupsForSecondaryFilter();
+    return;
+  }
+  refreshSecondaryFilter();
+});
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
