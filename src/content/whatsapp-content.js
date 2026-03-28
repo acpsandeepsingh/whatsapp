@@ -713,6 +713,16 @@ async function openViewAllMembersDialog(root = document) {
   return getSearchMembersPopup();
 }
 
+async function ensureMembersPopupOpen(root = document) {
+  const existing = getWaPopoverBucketDialog() || getSearchMembersPopup();
+  if (existing) return existing;
+
+  const reopened = await openViewAllMembersDialog(root);
+  if (reopened) return reopened;
+
+  return getWaPopoverBucketDialog() || getSearchMembersPopup() || null;
+}
+
 function findBestMemberScroller(root) {
   if (!root) return null;
   const candidates = [...root.querySelectorAll('div,section')];
@@ -773,10 +783,13 @@ async function scrapeGroupContacts(groupName) {
     const activePanel = activePopup || panel;
     if (!activePanel) {
       keepCurrentContextMisses += 1;
-      if (keepCurrentContextMisses >= 6) break;
+      if (keepCurrentContextMisses >= 12) break;
       await wait(350);
       continue;
     }
+
+    panel = activePanel;
+    keepCurrentContextMisses = 0;
 
     const scroller = findBestMemberScroller(activePanel) || activePanel;
     const rows = queryAllWithFallback(SELECTORS.participantRows, activePanel).filter(isValidParticipantRow);
