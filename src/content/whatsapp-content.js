@@ -791,10 +791,11 @@ async function scrapeGroupContacts(groupName, options = {}) {
   const discovered = new Map();
 
   let unchangedScrolls = 0;
+  let consecutiveBottomHits = 0;
   let previousCount = 0;
   let keepCurrentContextMisses = 0;
 
-  for (let i = 0; i < 45; i += 1) {
+  for (let i = 0; i < 240; i += 1) {
     const activePopup = getWaPopoverBucketDialog() || getSearchMembersPopup();
     const activePanel = activePopup || panel;
     if (!activePanel) {
@@ -817,16 +818,26 @@ async function scrapeGroupContacts(groupName, options = {}) {
     });
     collectVisibleMembersFromPanel(activePanel, discovered);
 
+    const step = Math.max(480, Math.floor(scroller.clientHeight * 0.9));
+    const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
     const previousTop = scroller.scrollTop;
-    scroller.scrollTop = Math.min(scroller.scrollTop + Math.max(420, Math.floor(scroller.clientHeight * 0.85)), scroller.scrollHeight);
-    const stuckAtBottom = Math.abs(scroller.scrollTop - previousTop) < 4;
-    await wait(800);
+    const nextTop = Math.min(previousTop + step, maxTop);
+    scroller.scrollTop = nextTop;
+    await wait(900);
+    const reachedBottom = nextTop >= maxTop - 3;
+    const stuckAtBottom = Math.abs(scroller.scrollTop - previousTop) < 4 || reachedBottom;
 
     if (discovered.size === previousCount) {
       unchangedScrolls += 1;
-      if (unchangedScrolls >= 12 && stuckAtBottom) break;
+      if (stuckAtBottom) consecutiveBottomHits += 1;
+      else consecutiveBottomHits = 0;
+
+      if (reachedBottom && unchangedScrolls >= 24 && consecutiveBottomHits >= 10) {
+        break;
+      }
     } else {
       unchangedScrolls = 0;
+      consecutiveBottomHits = 0;
       keepCurrentContextMisses = 0;
     }
 
@@ -852,11 +863,6 @@ async function scrapeGroupContacts(groupName, options = {}) {
         log('[Group Scrape] Unable to resolve member phone', contact.name, error?.message || error);
       }
     }
-  }
-
-  const back = queryWithFallback(SELECTORS.closePanelButtons);
-  if (back) {
-    (back.closest('button') || back).click();
   }
 
   const uniqueByPhone = new Map();

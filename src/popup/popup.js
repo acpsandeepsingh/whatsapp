@@ -286,7 +286,6 @@ chrome.runtime.onMessage.addListener((message) => {
 
 (async function init() {
   await loadSettings();
-  await fetchSnapshot();
   ui.primaryFilter.value = 'popup_contacts';
   refreshSecondaryFilter();
 })();
