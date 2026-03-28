@@ -62,7 +62,7 @@ const SELECTORS = {
     'div[data-testid="group-participants"]',
     'div[role="dialog"] [tabindex="-1"]'
   ],
-  participantRows: ['[aria-label*="Participants"] [role="listitem"]', 'div[data-testid="cell-frame-container"]', '[role="listitem"]'],
+  participantRows: ['[aria-label*="Participants"] [role="listitem"]', 'div[data-testid="group-participants"] [role="listitem"]', '[role="listitem"]'],
   closePanelButtons: ['button[aria-label="Back"]', 'span[data-icon="back"]', 'button[title="Back"]']
 };
 SELECTORS.filterTabs = {
@@ -389,9 +389,10 @@ function filterChats(snapshot = {}, filter = {}) {
   const secondary = filter.secondary || '';
 
   if (primary === 'all_contacts') {
-    if (secondary === 'unread_chats') return chats.filter((chat) => Number(chat.unreadCount) > 0);
-    if (secondary === 'read_chats') return chats.filter((chat) => Number(chat.unreadCount) === 0);
-    return chats;
+    const contactChats = chats.filter((chat) => !chat.isGroup && chat.phone);
+    if (secondary === 'unread_chats') return contactChats.filter((chat) => Number(chat.unreadCount) > 0);
+    if (secondary === 'read_chats') return contactChats.filter((chat) => Number(chat.unreadCount) === 0);
+    return contactChats;
   }
   if (primary === 'group') return chats.filter((chat) => chat.isGroup && (!secondary || chat.name === secondary));
   if (primary === 'country') return chats.filter((chat) => chat.countryCode === secondary);
@@ -521,6 +522,41 @@ function readContactFromRow(row) {
   };
 }
 
+function isValidParticipantRow(row) {
+  if (!(row instanceof Element)) return false;
+  if (row.querySelector('[data-icon="group"], [data-testid*="group"]')) return false;
+
+  const text = (row.textContent || '').replace(/\s+/g, ' ').trim();
+  if (!text) return false;
+
+  const phone = extractPhoneFromText(text);
+  if (phone) return true;
+
+  const words = text.split(' ').filter(Boolean);
+  return words.length >= 1 && words.length <= 8;
+}
+
+function cleanText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function hasMemberLikeText(value) {
+  const text = cleanText(value).toLowerCase();
+  if (!text) return false;
+  if (/view all|member changes|group settings|media|links|docs|starred|forwarded|type a message|exit group|report group|clear chat|kept messages/.test(text)) {
+    return false;
+  }
+
+  const lines = String(value || '')
+    .split('\n')
+    .map((line) => cleanText(line))
+    .filter(Boolean);
+
+  if (lines.length > 3) return false;
+  if (text.length > 140) return false;
+  return Boolean(extractPhoneFromText(text) || /group admin/.test(text) || /^~/.test(text));
+}
+
 function isLikelyPhoneText(value) {
   const digits = normalizePhone(value);
   return digits.length >= 7;
@@ -567,6 +603,56 @@ async function resolvePhoneFromMemberRow(row) {
   return phone;
 }
 
+async function resolvePhoneFromOpenChatProfile() {
+  const header = await waitForElement(SELECTORS.chatHeaderClickable, 8000);
+  if (!header) return '';
+
+  (header.closest('button') || header).click();
+  await wait(450);
+
+  const infoEntry = [...document.querySelectorAll('[role="button"], [role="listitem"], li, div')]
+    .find((node) => /contact info/i.test((node.textContent || '').trim()));
+
+  if (infoEntry) {
+    (infoEntry.closest('[role="button"]') || infoEntry).click();
+    await wait(500);
+  }
+
+  const selectableNodes = [...document.querySelectorAll('[data-testid="selectable-text"], span.copyable-text, div.copyable-text')];
+  const phoneText = selectableNodes.map((node) => (node.textContent || '').trim()).find(isLikelyPhoneText) || '';
+  const phone = phoneText ? normalizePhone(phoneText) : '';
+
+  await closeContactOrActionPanels();
+  return phone;
+}
+
+async function enrichDirectChatsWithProfilePhones(chats = [], filter = {}) {
+  const primary = filter.primary || 'all_contacts';
+  const shouldResolve = primary === 'all_contacts' || primary === 'country';
+  if (!shouldResolve) return chats;
+
+  const enriched = chats.map((chat) => ({ ...chat }));
+  const unresolved = enriched.filter((chat) => !chat.isGroup && !chat.phone && chat.name && chat.name !== 'Unknown');
+
+  for (const chat of unresolved) {
+    try {
+      await openChatBySearch(chat.name);
+      const resolvedPhone = await resolvePhoneFromOpenChatProfile();
+      if (!resolvedPhone) continue;
+
+      chat.phone = resolvedPhone;
+      if (!chat.countryCode) {
+        chat.countryCode = extractCountryCode(resolvedPhone);
+      }
+      log('[Contacts] Resolved saved contact phone from profile', chat.name, chat.phone);
+    } catch (error) {
+      log('[Contacts] Unable to resolve saved contact phone', chat.name, error?.message || error);
+    }
+  }
+
+  return enriched;
+}
+
 async function openGroupInfo(groupName) {
   await openChatBySearch(groupName);
 
@@ -584,35 +670,126 @@ async function openGroupInfo(groupName) {
   await wait(500);
 }
 
+async function openViewAllMembersDialog(root = document) {
+  const candidateButtons = [...root.querySelectorAll('[role="button"], button, [tabindex="0"]')];
+
+  const membersSearchButton = candidateButtons.find((node) => {
+    const label = `${node.getAttribute('aria-label') || ''} ${node.getAttribute('title') || ''} ${node.textContent || ''}`;
+    return /members?.*search members|search members/i.test(cleanText(label));
+  });
+
+  if (membersSearchButton) {
+    (membersSearchButton.closest('[role="button"],button') || membersSearchButton).click();
+    await wait(700);
+  }
+
+  const findMembersDialog = () => {
+    const bySearchInput = [...document.querySelectorAll('input[aria-label*="Search contacts" i], input[title*="Search contacts" i]')]
+      .map((input) => input.closest('[role="dialog"]'))
+      .find(Boolean);
+    if (bySearchInput) return bySearchInput;
+
+    const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+    return (
+      dialogs.reverse().find((dialog) => {
+        const text = cleanText(dialog.innerText || '');
+        return /members?|add member|view all|search contacts/i.test(text);
+      }) || null
+    );
+  };
+
+  let dialog = findMembersDialog();
+  const viewAllInDialog = [...(dialog || root).querySelectorAll('[role="button"], button, div[role="button"]')]
+    .find((node) => /view all\s*\(\d+\s*more\)|view all|see all/i.test(cleanText(node.textContent || '')));
+  if (viewAllInDialog) {
+    (viewAllInDialog.closest('[role="button"],button') || viewAllInDialog).click();
+    await wait(900);
+    dialog = findMembersDialog();
+  }
+
+  return dialog;
+}
+
+function findBestMemberScroller(root) {
+  if (!root) return null;
+  const candidates = [...root.querySelectorAll('div,section')];
+  return (
+    candidates
+      .filter((node) => node.scrollHeight > node.clientHeight + 120 && node.clientHeight > 180)
+      .sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || null
+  );
+}
+
+function collectVisibleMembersFromPanel(panel, discovered) {
+  const candidates = [
+    ...panel.querySelectorAll('[role="listitem"]'),
+    ...panel.querySelectorAll('div[tabindex="-1"]'),
+    ...panel.querySelectorAll('div[tabindex="0"]')
+  ];
+
+  candidates.forEach((row) => {
+    const raw = (row.innerText || row.textContent || '').trim();
+    if (!hasMemberLikeText(raw)) return;
+
+    const phone = extractPhoneFromText(raw);
+    const lines = raw
+      .split('\n')
+      .map((line) => cleanText(line))
+      .filter(Boolean);
+    const name = cleanText((lines[0] || '').replace(/group admin/gi, '').replace(/^~/, '').replace(phone, ''));
+    if (!name && !phone) return;
+    if (/^(you|#)$/i.test(name)) return;
+
+    const key = `${name || phone}|${phone || ''}`;
+    if (!discovered.has(key)) {
+      discovered.set(key, { name: name || phone, phone: normalizePhone(phone) || '' });
+    }
+  });
+}
+
 async function scrapeGroupContacts(groupName) {
   if (groupName) {
     await openGroupInfo(groupName);
   }
 
-  const panel = (await waitForElement(SELECTORS.participantsContainer, 12000)) || document.body;
+  const participantsPanel = await waitForElement(SELECTORS.participantsContainer, 12000);
+  if (!participantsPanel) {
+    throw new Error('Participants list not found. Open a group info panel before scraping.');
+  }
+  const membersDialog = await openViewAllMembersDialog(participantsPanel);
+  const panel = membersDialog || participantsPanel;
   const discovered = new Map();
 
   let unchangedScrolls = 0;
   let previousCount = 0;
+  let direction = 1;
 
-  for (let i = 0; i < 45; i += 1) {
-    const rows = queryAllWithFallback(SELECTORS.participantRows, panel);
+  const scroller = findBestMemberScroller(panel) || panel;
+
+  for (let i = 0; i < 70; i += 1) {
+    const rows = queryAllWithFallback(SELECTORS.participantRows, panel).filter(isValidParticipantRow);
     rows.forEach((row) => {
       const contact = readContactFromRow(row);
+      if (!contact.name || contact.name === 'Unknown') return;
       const key = `${contact.name}|${contact.phone || ''}`;
-      if (!discovered.has(key)) {
-        discovered.set(key, { ...contact });
-      }
+      if (!discovered.has(key)) discovered.set(key, { ...contact });
     });
+    collectVisibleMembersFromPanel(panel, discovered);
 
-    panel.scrollTop = panel.scrollHeight;
-    await wait(400);
+    scroller.scrollTop += direction * 260;
+    await wait(membersDialog ? 1100 : 450);
 
     if (discovered.size === previousCount) {
       unchangedScrolls += 1;
-      if (unchangedScrolls >= 5) break;
+      if (unchangedScrolls >= 12) break;
     } else {
       unchangedScrolls = 0;
+    }
+
+    if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8) {
+      direction = -1;
+    } else if (scroller.scrollTop <= 8) {
+      direction = 1;
     }
 
     previousCount = discovered.size;
@@ -620,9 +797,9 @@ async function scrapeGroupContacts(groupName) {
 
   const unresolvedContacts = [...discovered.entries()].filter(([, contact]) => !contact.phone);
   for (const [key, contact] of unresolvedContacts) {
-    const rows = queryAllWithFallback(SELECTORS.participantRows, panel).filter((row) =>
-      (row.textContent || '').includes(contact.name)
-    );
+    const rows = queryAllWithFallback(SELECTORS.participantRows, panel)
+      .filter(isValidParticipantRow)
+      .filter((row) => (row.textContent || '').includes(contact.name));
     const matchedRow = rows[0];
     if (!matchedRow) continue;
 
@@ -701,9 +878,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.FETCH_CONTACTS: {
-        const snapshot = await gatherSidebarDataForFilter(message.filter || {});
-        const contacts = filterChats(snapshot, message.filter || {});
-        sendResponse({ success: true, data: contacts, snapshot });
+        const requestedFilter = message.filter || {};
+        const snapshot = await gatherSidebarDataForFilter(requestedFilter);
+        const enrichedChats = await enrichDirectChatsWithProfilePhones(snapshot.chats || [], requestedFilter);
+        const enrichedSnapshot = { ...snapshot, chats: enrichedChats };
+        const contacts = filterChats(enrichedSnapshot, requestedFilter);
+        sendResponse({ success: true, data: contacts, snapshot: enrichedSnapshot });
         break;
       }
       case ACTIONS.SCRAPE_GROUP: {
