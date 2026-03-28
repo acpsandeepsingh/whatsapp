@@ -200,7 +200,7 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
   }
 
   const firstRow = normalizeRowArray(rows[0]);
-  let headerDetected = hasHeader === null ? isHeaderRow(firstRow) : Boolean(hasHeader);
+  let headerDetected = isHeaderRow(firstRow);
   let indexes = detectColumnIndexes(firstRow);
   let parseStartIndex = 0;
 
