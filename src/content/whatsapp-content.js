@@ -189,6 +189,12 @@ function normalizePhone(value) {
   return String(value || '').replace(/[^\d]/g, '');
 }
 
+function extractPhoneFromText(value) {
+  const text = String(value || '');
+  const phoneMatch = text.match(/\+?\d[\d\s()-]{6,}/);
+  return phoneMatch ? normalizePhone(phoneMatch[0]) : '';
+}
+
 function extractCountryCode(phone) {
   const digits = normalizePhone(phone);
   if (!digits) return '';
@@ -500,11 +506,65 @@ async function uploadAndSendAttachment(file) {
 function readContactFromRow(row) {
   const titleNode = row.querySelector('[title]');
   const text = titleNode?.getAttribute('title') || row.textContent || '';
-  const phoneMatch = text.match(/\+?\d[\d\s-]{6,}/);
+  const candidateStrings = [
+    text,
+    row.getAttribute('aria-label'),
+    row.getAttribute('title'),
+    row.getAttribute('data-id'),
+    row.getAttribute('id')
+  ].filter(Boolean);
+
+  const attributePhone = candidateStrings.map(extractPhoneFromText).find(Boolean) || '';
   return {
     name: titleNode?.textContent?.trim() || text.trim() || 'Unknown',
-    phone: phoneMatch ? normalizePhone(phoneMatch[0]) : ''
+    phone: attributePhone
   };
+}
+
+function isLikelyPhoneText(value) {
+  const digits = normalizePhone(value);
+  return digits.length >= 7;
+}
+
+async function closeContactOrActionPanels() {
+  const closeSelectors = [
+    'button[aria-label="Close"]',
+    'button[title="Close"]',
+    'button[aria-label="Back"]',
+    'button[title="Back"]',
+    'span[data-icon="x"]',
+    'span[data-icon="back"]'
+  ];
+
+  for (let i = 0; i < 2; i += 1) {
+    const closeBtn = queryWithFallback(closeSelectors);
+    if (!closeBtn) break;
+    (closeBtn.closest('button') || closeBtn).click();
+    await wait(250);
+  }
+}
+
+async function resolvePhoneFromMemberRow(row) {
+  (row.closest('[role="button"]') || row).click();
+  await wait(350);
+
+  const infoEntry = [...document.querySelectorAll('[role="button"], [role="listitem"], li, div')]
+    .find((node) => /contact info/i.test((node.textContent || '').trim()));
+
+  if (!infoEntry) {
+    await closeContactOrActionPanels();
+    return '';
+  }
+
+  (infoEntry.closest('[role="button"]') || infoEntry).click();
+  await wait(500);
+
+  const selectableNodes = [...document.querySelectorAll('[data-testid="selectable-text"], span.copyable-text, div.copyable-text')];
+  const phoneText = selectableNodes.map((node) => (node.textContent || '').trim()).find(isLikelyPhoneText) || '';
+  const phone = phoneText ? normalizePhone(phoneText) : '';
+
+  await closeContactOrActionPanels();
+  return phone;
 }
 
 async function openGroupInfo(groupName) {
@@ -539,7 +599,10 @@ async function scrapeGroupContacts(groupName) {
     const rows = queryAllWithFallback(SELECTORS.participantRows, panel);
     rows.forEach((row) => {
       const contact = readContactFromRow(row);
-      if (contact.phone) discovered.set(contact.phone, contact);
+      const key = `${contact.name}|${contact.phone || ''}`;
+      if (!discovered.has(key)) {
+        discovered.set(key, { ...contact });
+      }
     });
 
     panel.scrollTop = panel.scrollHeight;
@@ -555,12 +618,38 @@ async function scrapeGroupContacts(groupName) {
     previousCount = discovered.size;
   }
 
+  const unresolvedContacts = [...discovered.entries()].filter(([, contact]) => !contact.phone);
+  for (const [key, contact] of unresolvedContacts) {
+    const rows = queryAllWithFallback(SELECTORS.participantRows, panel).filter((row) =>
+      (row.textContent || '').includes(contact.name)
+    );
+    const matchedRow = rows[0];
+    if (!matchedRow) continue;
+
+    try {
+      const phone = await resolvePhoneFromMemberRow(matchedRow);
+      if (phone) {
+        discovered.set(key, { ...contact, phone });
+      }
+    } catch (error) {
+      log('[Group Scrape] Unable to resolve member phone', contact.name, error?.message || error);
+    }
+  }
+
   const back = queryWithFallback(SELECTORS.closePanelButtons);
   if (back) {
     (back.closest('button') || back).click();
   }
 
-  return [...discovered.values()];
+  const uniqueByPhone = new Map();
+  [...discovered.values()].forEach((contact) => {
+    if (!contact.phone) return;
+    if (!uniqueByPhone.has(contact.phone)) {
+      uniqueByPhone.set(contact.phone, contact);
+    }
+  });
+
+  return [...uniqueByPhone.values()];
 }
 
 async function sendSingleMessage({ srNo, phone, message, attachmentUrl, attachmentSendingEnabled = true }) {
