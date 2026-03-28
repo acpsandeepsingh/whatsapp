@@ -32,10 +32,18 @@ const ui = {
   maxRetries: document.getElementById('maxRetries'),
   randomDelayEnabled: document.getElementById('randomDelayEnabled'),
   attachmentSendingEnabled: document.getElementById('attachmentSendingEnabled'),
-  defaultTemplate: document.getElementById('defaultTemplate')
+  defaultTemplate: document.getElementById('defaultTemplate'),
+  importPreviewModal: document.getElementById('importPreviewModal'),
+  importPreviewTable: document.getElementById('importPreviewTable'),
+  importHasHeader: document.getElementById('importHasHeader'),
+  importModalStatus: document.getElementById('importModalStatus'),
+  confirmImportBtn: document.getElementById('confirmImportBtn'),
+  cancelImportBtn: document.getElementById('cancelImportBtn')
 };
 
 let rows = [];
+let pendingImportFile = null;
+let pendingImportPreviewRows = [];
 let chatSnapshot = {
   chats: [],
   groups: [],
@@ -125,6 +133,75 @@ function renderRows() {
 function setStatus(text, isError = false) {
   ui.statusText.textContent = text;
   ui.statusText.style.color = isError ? '#f87171' : '#93c5fd';
+}
+
+function setImportModalStatus(text, isError = false) {
+  if (!ui.importModalStatus) return;
+  ui.importModalStatus.textContent = text;
+  ui.importModalStatus.style.color = isError ? '#f87171' : '#94a3b8';
+}
+
+function openImportModal() {
+  ui.importPreviewModal?.classList.remove('hidden');
+  ui.importPreviewModal?.setAttribute('aria-hidden', 'false');
+}
+
+function closeImportModal() {
+  ui.importPreviewModal?.classList.add('hidden');
+  ui.importPreviewModal?.setAttribute('aria-hidden', 'true');
+}
+
+function renderImportPreviewTable(rowsForPreview = []) {
+  if (!ui.importPreviewTable) return;
+  ui.importPreviewTable.innerHTML = '';
+
+  if (!rowsForPreview.length) {
+    ui.importPreviewTable.innerHTML = '<tbody><tr><td>No rows detected in file.</td></tr></tbody>';
+    return;
+  }
+
+  const limitedRows = rowsForPreview.slice(0, 20);
+  const maxColumns = Math.max(...limitedRows.map((row) => row.length), 1);
+  const body = document.createElement('tbody');
+
+  limitedRows.forEach((row, rowIndex) => {
+    const tr = document.createElement('tr');
+    for (let columnIndex = 0; columnIndex < maxColumns; columnIndex += 1) {
+      const td = document.createElement('td');
+      const value = row[columnIndex] ?? '';
+      td.textContent = String(value);
+      if (rowIndex === 0) {
+        td.style.fontWeight = '700';
+      }
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  });
+
+  ui.importPreviewTable.appendChild(body);
+}
+
+function looksLikeHeaderCell(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return /sr|serial|mobile|phone|whatsapp|name|message|template|attachment|url/.test(normalized);
+}
+
+async function readWorkbookPreviewRows(file) {
+  if (!window.XLSX) {
+    throw new Error('SheetJS (XLSX) is not loaded.');
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const allRows = window.XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    defval: '',
+    raw: true
+  });
+
+  return allRows;
 }
 
 function renderProgress(progress, latest = null) {
@@ -482,10 +559,38 @@ ui.importBtn.addEventListener('click', async () => {
       return;
     }
 
-    const parsed = await parseWorkbook(file);
+    pendingImportFile = file;
+    pendingImportPreviewRows = await readWorkbookPreviewRows(file);
+    renderImportPreviewTable(pendingImportPreviewRows);
+
+    const firstRow = pendingImportPreviewRows?.[0] || [];
+    const firstRowHasHeader = firstRow.some((cell) => looksLikeHeaderCell(cell));
+    ui.importHasHeader.checked = firstRowHasHeader;
+    setImportModalStatus(`Preview loaded: ${Math.min(pendingImportPreviewRows.length, 20)} row(s) shown from ${file.name}.`);
+    openImportModal();
+  } catch (error) {
+    setStatus(`Import failed: ${error.message}`, true);
+  }
+});
+
+ui.cancelImportBtn?.addEventListener('click', () => {
+  closeImportModal();
+  setImportModalStatus('Import canceled.');
+});
+
+ui.confirmImportBtn?.addEventListener('click', async () => {
+  try {
+    if (!pendingImportFile) {
+      setImportModalStatus('No file selected for import.', true);
+      return;
+    }
+
+    const parsed = await parseWorkbook(pendingImportFile, { hasHeader: ui.importHasHeader.checked });
     console.log('[WA CRM][Options] Parsed XLS rows:', parsed);
     if (!parsed.length) {
-      setStatus('Import finished, but 0 valid contacts were found. Check mobile number column.', true);
+      const errorText = 'Import finished, but 0 valid contacts were found. Please verify the Mobile Number column.';
+      setImportModalStatus(errorText, true);
+      setStatus(errorText, true);
       return;
     }
 
@@ -498,8 +603,12 @@ ui.importBtn.addEventListener('click', async () => {
     }));
     renderRows();
     await saveRows();
-    setStatus(`Imported ${rows.length} row(s) from ${file.name}.`);
+    closeImportModal();
+    setStatus(`Imported ${rows.length} row(s) from ${pendingImportFile.name}.`);
+    pendingImportFile = null;
+    pendingImportPreviewRows = [];
   } catch (error) {
+    setImportModalStatus(`Import failed: ${error.message}`, true);
     setStatus(`Import failed: ${error.message}`, true);
   }
 });

@@ -179,7 +179,7 @@ function parseRows(rows = [], indexes = {}, { headerDetected = false } = {}) {
   return output;
 }
 
-export async function parseWorkbook(file) {
+export async function parseWorkbook(file, { hasHeader = null } = {}) {
   if (!window.XLSX) {
     throw new Error('SheetJS (XLSX) is not loaded.');
   }

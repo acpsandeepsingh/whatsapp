@@ -100,6 +100,25 @@
           <tbody id="rowsTableBody"></tbody>
         </table>
       </section>
+
+      <section id="importPreviewModal" class="modal hidden" aria-hidden="true">
+        <div class="modal-card panel">
+          <h2>Import Preview</h2>
+          <p class="muted">Review rows before import. You can toggle header handling if your file does not have a header row.</p>
+          <label class="checkbox-row">
+            <input id="importHasHeader" type="checkbox" checked />
+            My file has a header row
+          </label>
+          <div class="preview-table-wrap">
+            <table id="importPreviewTable" class="preview-table"></table>
+          </div>
+          <p id="importModalStatus" class="muted">Ready to import.</p>
+          <div class="button-row">
+            <button id="confirmImportBtn">Import Rows</button>
+            <button id="cancelImportBtn" class="secondary">Cancel</button>
+          </div>
+        </div>
+      </section>
     </main>
 
     <script src="../../libs/xlsx.full.min.js"></script>
