@@ -201,9 +201,11 @@ async function fetchContacts() {
     return;
   }
 
-  if (!(await fetchSnapshot())) return;
-
   const selectedPrimary = ui.primaryFilter.value;
+  if (selectedPrimary !== 'popup_contacts') {
+    if (!(await fetchSnapshot())) return;
+  }
+
   const payload =
     selectedPrimary === 'popup_contacts'
       ? createMessage(ACTIONS.SCRAPE_GROUP)

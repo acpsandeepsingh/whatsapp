@@ -760,7 +760,9 @@ function collectVisibleMembersFromPanel(panel, discovered) {
   });
 }
 
-async function scrapeGroupContacts(groupName) {
+async function scrapeGroupContacts(groupName, options = {}) {
+  const resolveMissingPhones = Boolean(options.resolveMissingPhones);
+
   if (groupName) {
     await openGroupInfo(groupName);
   }
@@ -817,22 +819,24 @@ async function scrapeGroupContacts(groupName) {
     previousCount = discovered.size;
   }
 
-  const unresolvedContacts = [...discovered.entries()].filter(([, contact]) => !contact.phone);
-  for (const [key, contact] of unresolvedContacts) {
-    const currentPanel = getWaPopoverBucketDialog() || getSearchMembersPopup() || panel;
-    const rows = queryAllWithFallback(SELECTORS.participantRows, currentPanel)
-      .filter(isValidParticipantRow)
-      .filter((row) => (row.textContent || '').includes(contact.name));
-    const matchedRow = rows[0];
-    if (!matchedRow) continue;
+  if (resolveMissingPhones) {
+    const unresolvedContacts = [...discovered.entries()].filter(([, contact]) => !contact.phone);
+    for (const [key, contact] of unresolvedContacts) {
+      const currentPanel = getWaPopoverBucketDialog() || getSearchMembersPopup() || panel;
+      const rows = queryAllWithFallback(SELECTORS.participantRows, currentPanel)
+        .filter(isValidParticipantRow)
+        .filter((row) => (row.textContent || '').includes(contact.name));
+      const matchedRow = rows[0];
+      if (!matchedRow) continue;
 
-    try {
-      const phone = await resolvePhoneFromMemberRow(matchedRow);
-      if (phone) {
-        discovered.set(key, { ...contact, phone });
+      try {
+        const phone = await resolvePhoneFromMemberRow(matchedRow);
+        if (phone) {
+          discovered.set(key, { ...contact, phone });
+        }
+      } catch (error) {
+        log('[Group Scrape] Unable to resolve member phone', contact.name, error?.message || error);
       }
-    } catch (error) {
-      log('[Group Scrape] Unable to resolve member phone', contact.name, error?.message || error);
     }
   }
 
@@ -910,7 +914,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.SCRAPE_GROUP: {
-        const contacts = await scrapeGroupContacts(message.groupName || '');
+        const contacts = await scrapeGroupContacts(message.groupName || '', { resolveMissingPhones: false });
         sendResponse({ success: true, data: contacts });
         break;
       }
