@@ -4,6 +4,7 @@ const ui = {
   primaryFilter: document.getElementById('primaryFilter'),
   secondaryFilter: document.getElementById('secondaryFilter'),
   fetchContactsBtn: document.getElementById('fetchContactsBtn'),
+  downloadContactsBtn: document.getElementById('downloadContactsBtn'),
   startFromStorageBtn: document.getElementById('startFromStorageBtn'),
   openDashboardBtn: document.getElementById('openDashboardBtn'),
   statusText: document.getElementById('statusText'),
@@ -11,6 +12,7 @@ const ui = {
 };
 
 let chatSnapshot = { groups: [], countryCodes: [] };
+let latestFetchedContacts = [];
 
 const CHAT_SCOPE_OPTIONS = [
   { value: 'all_chats', label: 'All Chats' },
@@ -21,6 +23,47 @@ const CHAT_SCOPE_OPTIONS = [
 function setStatus(text, isError = false) {
   ui.statusText.textContent = text;
   ui.statusText.style.color = isError ? '#fecaca' : '#93c5fd';
+}
+
+function escapeCsvValue(value) {
+  const normalized = String(value ?? '');
+  if (/[",\n]/.test(normalized)) {
+    return `"${normalized.replace(/"/g, '""')}"`;
+  }
+  return normalized;
+}
+
+function downloadContactFormatWithName() {
+  if (!latestFetchedContacts.length) {
+    setStatus('No synchronized contacts available to download.', true);
+    return;
+  }
+
+  const headers = ['Sr No', 'Mobile Number', 'Name', 'Message Template', 'Attachment URL'];
+  const rows = latestFetchedContacts.map((contact, index) => [
+    index + 1,
+    contact.phone || '',
+    contact.name || '',
+    'Hello {{name}}',
+    ''
+  ]);
+
+  const csv = [headers, ...rows]
+    .map((row) => row.map((cell) => escapeCsvValue(cell)).join(','))
+    .join('\n');
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const timestamp = new Date().toISOString().slice(0, 10);
+  link.href = url;
+  link.download = `wa-synced-contacts-with-name-${timestamp}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+
+  setStatus(`Downloaded ${latestFetchedContacts.length} contacts in requested format.`);
 }
 
 function buildSecondaryOptions(values, placeholder = 'Select value') {
@@ -159,6 +202,8 @@ async function fetchContacts() {
   }
 
   const count = response?.data?.length || 0;
+  latestFetchedContacts = response.data || [];
+  ui.downloadContactsBtn.classList.toggle('hidden', !count);
   setStatus(`Success: ${count} contacts`);
   ui.latestLog.textContent = JSON.stringify(
     {
@@ -179,6 +224,7 @@ ui.openDashboardBtn.addEventListener('click', async () => {
 });
 
 ui.fetchContactsBtn.addEventListener('click', fetchContacts);
+ui.downloadContactsBtn?.addEventListener('click', downloadContactFormatWithName);
 ui.startFromStorageBtn?.addEventListener('click', startSendingFromDashboardRows);
 ui.primaryFilter.addEventListener('change', refreshSecondaryFilter);
 

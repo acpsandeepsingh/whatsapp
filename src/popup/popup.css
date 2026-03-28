@@ -50,6 +50,10 @@ button.secondary {
   color: #e2e8f0;
 }
 
+.hidden {
+  display: none;
+}
+
 .status-card {
   background: #1e293b;
   border-radius: 8px;
