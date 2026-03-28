@@ -65,11 +65,108 @@ const SELECTORS = {
   participantRows: ['[aria-label*="Participants"] [role="listitem"]', 'div[data-testid="cell-frame-container"]', '[role="listitem"]'],
   closePanelButtons: ['button[aria-label="Back"]', 'span[data-icon="back"]', 'button[title="Back"]']
 };
+SELECTORS.filterTabs = {
+  all: ['button#all-filter', 'button[role="tab"][id="all-filter"]'],
+  unread: ['button#unread-filter', 'button[role="tab"][id="unread-filter"]'],
+  favorites: ['button#favorites-filter', 'button[role="tab"][id="favorites-filter"]'],
+  additional: ['button#additional-filters', 'button[role="tab"][id="additional-filters"]']
+};
+SELECTORS.additionalFilterMenuItems = ['[role="menuitem"]', 'div[role="option"]'];
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function log(...args) {
   console.log('[WA CRM][Content]', ...args);
+}
+
+function summarizeElementForLog(node) {
+  if (!(node instanceof Element)) return 'non-element target';
+
+  const label = node.getAttribute('aria-label') || node.getAttribute('title') || '';
+  const testId = node.getAttribute('data-testid') || '';
+  const role = node.getAttribute('role') || '';
+  const className = String(node.className || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join('.');
+
+  let text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+  if (text.length > 80) text = `${text.slice(0, 77)}...`;
+
+  const parts = [
+    node.tagName?.toLowerCase() || 'unknown',
+    node.id ? `#${node.id}` : '',
+    className ? `.${className}` : '',
+    role ? `[role="${role}"]` : '',
+    label ? `[label="${label}"]` : '',
+    testId ? `[data-testid="${testId}"]` : '',
+    text ? `text="${text}"` : ''
+  ].filter(Boolean);
+
+  return parts.join('');
+}
+
+function setupWhatsAppInteractionDebugLogs() {
+  if (globalThis.__WA_CRM_CLICK_LOGGING_READY__) return;
+  globalThis.__WA_CRM_CLICK_LOGGING_READY__ = true;
+
+  document.addEventListener(
+    'click',
+    (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const clickable = target?.closest('button, [role="button"], [role="option"], [data-testid], [title], [aria-label]');
+      const summary = summarizeElementForLog(clickable || target);
+      log('[Debug][Click]', summary);
+    },
+    true
+  );
+
+  if (!globalThis.__WA_CRM_FETCH_PATCHED__ && typeof window.fetch === 'function') {
+    globalThis.__WA_CRM_FETCH_PATCHED__ = true;
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const [resource, config = {}] = args;
+      const url = typeof resource === 'string' ? resource : resource?.url || 'unknown-url';
+      const method = (config?.method || (typeof resource !== 'string' && resource?.method) || 'GET').toUpperCase();
+      const startedAt = performance.now();
+      log('[Debug][Fetch][Start]', { method, url });
+      try {
+        const response = await originalFetch(...args);
+        const durationMs = Math.round(performance.now() - startedAt);
+        log('[Debug][Fetch][Done]', { method, url, status: response.status, durationMs });
+        return response;
+      } catch (error) {
+        const durationMs = Math.round(performance.now() - startedAt);
+        log('[Debug][Fetch][Error]', { method, url, durationMs, error: error?.message || String(error) });
+        throw error;
+      }
+    };
+  }
+
+  if (!globalThis.__WA_CRM_XHR_PATCHED__ && typeof window.XMLHttpRequest === 'function') {
+    globalThis.__WA_CRM_XHR_PATCHED__ = true;
+    const originalOpen = window.XMLHttpRequest.prototype.open;
+    const originalSend = window.XMLHttpRequest.prototype.send;
+
+    window.XMLHttpRequest.prototype.open = function patchedOpen(method, url, ...rest) {
+      this.__waCrmDebugMeta = { method: String(method || 'GET').toUpperCase(), url: String(url || '') };
+      return originalOpen.call(this, method, url, ...rest);
+    };
+
+    window.XMLHttpRequest.prototype.send = function patchedSend(body) {
+      const meta = this.__waCrmDebugMeta || { method: 'GET', url: 'unknown-url' };
+      const startedAt = performance.now();
+      log('[Debug][XHR][Start]', meta);
+      this.addEventListener('loadend', () => {
+        const durationMs = Math.round(performance.now() - startedAt);
+        log('[Debug][XHR][Done]', { ...meta, status: this.status, durationMs });
+      });
+      return originalSend.call(this, body);
+    };
+  }
+
+  log('[Debug] Interaction/API logging enabled.');
 }
 
 function queryWithFallback(selectors, root = document) {
@@ -207,6 +304,77 @@ async function gatherSidebarData() {
   const countryCodes = [...new Set(chats.map((c) => c.countryCode).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
   return { chats, groups, labels, countryCodes };
+}
+
+async function clickFilterButton(filterName) {
+  const selectors = SELECTORS.filterTabs[filterName];
+  if (!selectors) return false;
+
+  const button = queryWithFallback(selectors);
+  if (!button) {
+    log(`[Filter] Button not found for "${filterName}"`);
+    return false;
+  }
+
+  (button.closest('button') || button).click();
+  await wait(350);
+  log(`[Filter] Applied "${filterName}"`);
+  return true;
+}
+
+async function selectAdditionalFilterOption(label) {
+  const opened = await clickFilterButton('additional');
+  if (!opened) return false;
+
+  const normalizedLabel = String(label || '').trim().toLowerCase();
+  const menuItems = await waitForElement(SELECTORS.additionalFilterMenuItems, 3000);
+  if (!menuItems) return false;
+
+  const allItems = queryAllWithFallback(SELECTORS.additionalFilterMenuItems).filter((item) => item.textContent?.trim());
+  const selectedItem = allItems.find((item) => {
+    const itemLabel = (item.getAttribute('aria-label') || item.textContent || '').trim().toLowerCase();
+    return itemLabel === normalizedLabel || itemLabel.includes(normalizedLabel);
+  });
+
+  if (!selectedItem) {
+    log(`[Filter] Additional filter option not found for "${label}"`);
+    return false;
+  }
+
+  (selectedItem.closest('[role="menuitem"]') || selectedItem).click();
+  await wait(500);
+  log(`[Filter] Applied additional option "${label}"`);
+  return true;
+}
+
+async function applyNativeFilter(filter = {}) {
+  const primary = filter.primary || 'all_contacts';
+  const secondary = filter.secondary || '';
+
+  if (primary === 'group') {
+    await selectAdditionalFilterOption('Groups');
+    return { primary, secondary };
+  }
+
+  if (primary === 'all_contacts' && secondary === 'unread_chats') {
+    await clickFilterButton('unread');
+    return { primary, secondary };
+  }
+
+  if (primary === 'favorites') {
+    await clickFilterButton('favorites');
+    return { primary, secondary };
+  }
+
+  await clickFilterButton('all');
+  return { primary, secondary };
+}
+
+async function gatherSidebarDataForFilter(filter = {}) {
+  await applyNativeFilter(filter);
+  const snapshot = await gatherSidebarData();
+  await clickFilterButton('all');
+  return snapshot;
 }
 
 function filterChats(snapshot = {}, filter = {}) {
@@ -434,17 +602,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ success: true });
         break;
       case ACTIONS.GET_CHAT_SNAPSHOT: {
-        const snapshot = await gatherSidebarData();
+        const snapshot = await gatherSidebarDataForFilter({ primary: 'all_contacts', secondary: 'all_chats' });
         sendResponse({ success: true, ...snapshot });
         break;
       }
       case ACTIONS.GET_GROUPS: {
-        const snapshot = await gatherSidebarData();
+        const snapshot = await gatherSidebarDataForFilter({ primary: 'group', secondary: '' });
         sendResponse({ success: true, groups: snapshot.groups });
         break;
       }
       case ACTIONS.FETCH_CONTACTS: {
-        const snapshot = await gatherSidebarData();
+        const snapshot = await gatherSidebarDataForFilter(message.filter || {});
         const contacts = filterChats(snapshot, message.filter || {});
         sendResponse({ success: true, data: contacts, snapshot });
         break;
@@ -475,5 +643,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
+setupWhatsAppInteractionDebugLogs();
 
 })();
