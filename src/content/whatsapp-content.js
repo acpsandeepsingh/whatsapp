@@ -582,6 +582,56 @@ async function resolvePhoneFromMemberRow(row) {
   return phone;
 }
 
+async function resolvePhoneFromOpenChatProfile() {
+  const header = await waitForElement(SELECTORS.chatHeaderClickable, 8000);
+  if (!header) return '';
+
+  (header.closest('button') || header).click();
+  await wait(450);
+
+  const infoEntry = [...document.querySelectorAll('[role="button"], [role="listitem"], li, div')]
+    .find((node) => /contact info/i.test((node.textContent || '').trim()));
+
+  if (infoEntry) {
+    (infoEntry.closest('[role="button"]') || infoEntry).click();
+    await wait(500);
+  }
+
+  const selectableNodes = [...document.querySelectorAll('[data-testid="selectable-text"], span.copyable-text, div.copyable-text')];
+  const phoneText = selectableNodes.map((node) => (node.textContent || '').trim()).find(isLikelyPhoneText) || '';
+  const phone = phoneText ? normalizePhone(phoneText) : '';
+
+  await closeContactOrActionPanels();
+  return phone;
+}
+
+async function enrichDirectChatsWithProfilePhones(chats = [], filter = {}) {
+  const primary = filter.primary || 'all_contacts';
+  const shouldResolve = primary === 'all_contacts' || primary === 'country';
+  if (!shouldResolve) return chats;
+
+  const enriched = chats.map((chat) => ({ ...chat }));
+  const unresolved = enriched.filter((chat) => !chat.isGroup && !chat.phone && chat.name && chat.name !== 'Unknown');
+
+  for (const chat of unresolved) {
+    try {
+      await openChatBySearch(chat.name);
+      const resolvedPhone = await resolvePhoneFromOpenChatProfile();
+      if (!resolvedPhone) continue;
+
+      chat.phone = resolvedPhone;
+      if (!chat.countryCode) {
+        chat.countryCode = extractCountryCode(resolvedPhone);
+      }
+      log('[Contacts] Resolved saved contact phone from profile', chat.name, chat.phone);
+    } catch (error) {
+      log('[Contacts] Unable to resolve saved contact phone', chat.name, error?.message || error);
+    }
+  }
+
+  return enriched;
+}
+
 async function openGroupInfo(groupName) {
   await openChatBySearch(groupName);
 
@@ -597,6 +647,60 @@ async function openGroupInfo(groupName) {
   }
 
   await wait(500);
+}
+
+async function openViewAllMembersDialog(root = document) {
+  const candidateButtons = [...root.querySelectorAll('[role="button"], button, [tabindex="0"]')];
+  const viewAll = candidateButtons.find((node) => /view all\s*\(\d+\s*more\)|view all|see all/i.test(cleanText(node.textContent)));
+  if (!viewAll) return null;
+
+  (viewAll.closest('[role="button"],button') || viewAll).click();
+  await wait(700);
+
+  const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+  return (
+    dialogs.reverse().find((dialog) => {
+      const text = cleanText(dialog.innerText || '');
+      return /members?|add member|view all/i.test(text);
+    }) || null
+  );
+}
+
+function findBestMemberScroller(root) {
+  if (!root) return null;
+  const candidates = [...root.querySelectorAll('div,section')];
+  return (
+    candidates
+      .filter((node) => node.scrollHeight > node.clientHeight + 120 && node.clientHeight > 180)
+      .sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || null
+  );
+}
+
+function collectVisibleMembersFromPanel(panel, discovered) {
+  const candidates = [
+    ...panel.querySelectorAll('[role="listitem"]'),
+    ...panel.querySelectorAll('div[tabindex="-1"]'),
+    ...panel.querySelectorAll('div[tabindex="0"]')
+  ];
+
+  candidates.forEach((row) => {
+    const raw = (row.innerText || row.textContent || '').trim();
+    if (!hasMemberLikeText(raw)) return;
+
+    const phone = extractPhoneFromText(raw);
+    const lines = raw
+      .split('\n')
+      .map((line) => cleanText(line))
+      .filter(Boolean);
+    const name = cleanText((lines[0] || '').replace(/group admin/gi, '').replace(/^~/, '').replace(phone, ''));
+    if (!name && !phone) return;
+    if (/^(you|#)$/i.test(name)) return;
+
+    const key = `${name || phone}|${phone || ''}`;
+    if (!discovered.has(key)) {
+      discovered.set(key, { name: name || phone, phone: normalizePhone(phone) || '' });
+    }
+  });
 }
 
 async function scrapeGroupContacts(groupName) {
@@ -619,13 +723,12 @@ async function scrapeGroupContacts(groupName) {
       const contact = readContactFromRow(row);
       if (!contact.name || contact.name === 'Unknown') return;
       const key = `${contact.name}|${contact.phone || ''}`;
-      if (!discovered.has(key)) {
-        discovered.set(key, { ...contact });
-      }
+      if (!discovered.has(key)) discovered.set(key, { ...contact });
     });
+    collectVisibleMembersFromPanel(panel, discovered);
 
-    panel.scrollTop = panel.scrollHeight;
-    await wait(400);
+    scroller.scrollTop = scroller.scrollHeight;
+    await wait(membersDialog ? 900 : 400);
 
     if (discovered.size === previousCount) {
       unchangedScrolls += 1;
@@ -720,9 +823,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.FETCH_CONTACTS: {
-        const snapshot = await gatherSidebarDataForFilter(message.filter || {});
-        const contacts = filterChats(snapshot, message.filter || {});
-        sendResponse({ success: true, data: contacts, snapshot });
+        const requestedFilter = message.filter || {};
+        const snapshot = await gatherSidebarDataForFilter(requestedFilter);
+        const enrichedChats = await enrichDirectChatsWithProfilePhones(snapshot.chats || [], requestedFilter);
+        const enrichedSnapshot = { ...snapshot, chats: enrichedChats };
+        const contacts = filterChats(enrichedSnapshot, requestedFilter);
+        sendResponse({ success: true, data: contacts, snapshot: enrichedSnapshot });
         break;
       }
       case ACTIONS.SCRAPE_GROUP: {
