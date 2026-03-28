@@ -123,39 +123,9 @@ function isHeaderRow(row = []) {
   return /mobile|phone|whatsapp|message|template|sr/.test(joined);
 }
 
-export async function parseWorkbook(file) {
-  if (!window.XLSX) {
-    throw new Error('SheetJS (XLSX) is not loaded.');
-  }
-
-  const arrayBuffer = await file.arrayBuffer();
-  const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-
-  const rows = window.XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: '',
-    raw: true
-  });
-
-  if (!rows.length) {
-    return [];
-  }
-
-  const firstRow = normalizeRowArray(rows[0]);
-  const headerDetected = isHeaderRow(firstRow);
-  let indexes = detectColumnIndexes(firstRow);
-
-  if (!headerDetected) {
-    indexes = inferColumnIndexesFromData(rows, indexes);
-  }
-
-  if (headerDetected) {
-    console.log('[WA CRM][XLS] Header row detected and skipped:', rows[0], indexes);
-  }
-
+function parseRows(rows = [], indexes = {}, { headerDetected = false } = {}) {
   const output = [];
+
   for (let index = 0; index < rows.length; index += 1) {
     if (headerDetected && index === 0) continue;
 
@@ -197,6 +167,59 @@ export async function parseWorkbook(file) {
 
     console.log('[WA CRM][XLS] Parsed row:', parsedRow);
     output.push(parsedRow);
+  }
+
+  return output;
+}
+
+export async function parseWorkbook(file) {
+  if (!window.XLSX) {
+    throw new Error('SheetJS (XLSX) is not loaded.');
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+
+  const rows = window.XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    defval: '',
+    raw: true
+  });
+
+  if (!rows.length) {
+    return [];
+  }
+
+  const firstRow = normalizeRowArray(rows[0]);
+  const headerDetected = isHeaderRow(firstRow);
+  let indexes = detectColumnIndexes(firstRow);
+
+  if (!headerDetected) {
+    indexes = inferColumnIndexesFromData(rows, indexes);
+  }
+
+  if (headerDetected) {
+    console.log('[WA CRM][XLS] Header row detected and skipped:', rows[0], indexes);
+  }
+
+  let output = parseRows(rows, indexes, { headerDetected });
+
+  // Some sheets include a title row with words like "phone" which can be misdetected
+  // as a real header. If that happens and import result is empty, retry with inferred indexes.
+  if (!output.length && rows.length > 1) {
+    const fallbackIndexes = inferColumnIndexesFromData(rows.slice(1), indexes);
+    const fallbackOutput = parseRows(rows, fallbackIndexes, { headerDetected });
+
+    if (fallbackOutput.length) {
+      console.warn('[WA CRM][XLS] Recovered import with fallback column inference:', {
+        previousIndexes: indexes,
+        fallbackIndexes
+      });
+      indexes = fallbackIndexes;
+      output = fallbackOutput;
+    }
   }
 
   console.log('[WA CRM][XLS] Import summary:', {
