@@ -1,3 +1,10 @@
+(() => {
+  if (globalThis.__WA_CRM_CONTENT_SCRIPT_READY__) {
+    console.log('[WA CRM][Content] Duplicate injection ignored.');
+    return;
+  }
+  globalThis.__WA_CRM_CONTENT_SCRIPT_READY__ = true;
+
 const ACTIONS = Object.freeze({
   GET_GROUPS: 'GET_GROUPS',
   FETCH_CONTACTS: 'FETCH_CONTACTS',
@@ -21,11 +28,6 @@ const ACTIONS = Object.freeze({
 function getAction(message = {}) {
   return message.action || message.type || '';
 }
-
-if (window.__WA_CRM_CONTENT_SCRIPT_READY__) {
-  console.log('[WA CRM][Content] Duplicate injection ignored.');
-} else {
-  window.__WA_CRM_CONTENT_SCRIPT_READY__ = true;
 
 const SELECTORS = {
   appReady: ['#app'],
@@ -443,4 +445,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return true;
 });
-}
+
+
+})();
