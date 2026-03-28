@@ -393,6 +393,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ success: false, error: 'No running or previous contact fetch found.' });
         break;
       }
+      case ACTIONS.STOP_CONTACT_FETCH: {
+        const stopSignalResult = await sendToContent(createMessage(ACTIONS.STOP_CONTACT_FETCH));
+        if (contactFetchState.running && contactFetchState.activePromise) {
+          const result = await contactFetchState.activePromise;
+          sendResponse({ success: true, stopping: true, result, stopSignalResult });
+          break;
+        }
+        sendResponse({ success: true, stopping: true, result: contactFetchState.lastResult, stopSignalResult });
+        break;
+      }
       case ACTIONS.OPEN_CHAT: {
         const result = await sendToContent(
           createMessage(ACTIONS.OPEN_CHAT, { query: message.query || message.phone || '' })
