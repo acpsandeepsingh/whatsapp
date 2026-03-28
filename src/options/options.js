@@ -7,6 +7,7 @@ const STORAGE_KEY = 'dashboardRows';
 const ui = {
   xlsInput: document.getElementById('xlsInput'),
   importBtn: document.getElementById('importBtn'),
+  downloadTemplateBtn: document.getElementById('downloadTemplateBtn'),
   addRowBtn: document.getElementById('addRowBtn'),
   saveRowsBtn: document.getElementById('saveRowsBtn'),
   startBtn: document.getElementById('startBtn'),
@@ -61,11 +62,26 @@ function defaultRow() {
     srNo: rows.length + 1,
     mobileNumber: '',
     name: '',
-    messageTemplate: 'Hello {{name}}, your mobile is {{mobile}} and serial is {{sr_no}}',
+    messageTemplate: 'Hello World',
     attachmentUrl: '',
     status: 'Pending',
     raw: {}
   };
+}
+
+
+function downloadBlankTemplate() {
+  if (!window.XLSX) {
+    setStatus('Template download failed: SheetJS not loaded.', true);
+    return;
+  }
+
+  const headers = ['Sr No', 'Mobile Number', 'Name', 'Message Template', 'Attachment URL'];
+  const sheet = window.XLSX.utils.aoa_to_sheet([headers, ['', '', '', '', '']]);
+  const workbook = window.XLSX.utils.book_new();
+  window.XLSX.utils.book_append_sheet(workbook, sheet, 'Contacts');
+  window.XLSX.writeFile(workbook, 'wa-crm-import-template.xlsx');
+  setStatus('Blank import template downloaded. Fill it and import.');
 }
 
 async function saveRows() {
@@ -455,6 +471,8 @@ ui.saveRowsBtn.addEventListener('click', async () => {
   await saveRows();
   setStatus('Rows saved to chrome.storage.local');
 });
+
+ui.downloadTemplateBtn?.addEventListener('click', downloadBlankTemplate);
 
 ui.importBtn.addEventListener('click', async () => {
   try {

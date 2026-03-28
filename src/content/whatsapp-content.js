@@ -33,11 +33,12 @@ const SELECTORS = {
   appReady: ['#app'],
   paneSide: ['#pane-side'],
   chatSearchInputs: [
-    'div[role="search"] [contenteditable="true"]',
-    'div[aria-label="Search input textbox"][contenteditable="true"]',
     '[data-testid="chat-list-search"] [contenteditable="true"]',
+    '[data-testid="chat-list-search"] [role="textbox"]',
+    '[aria-label="Search input textbox"][contenteditable="true"]',
     '[contenteditable="true"][data-tab="3"]',
-    'aside [role="textbox"][contenteditable="true"]'
+    'aside [role="textbox"][contenteditable="true"]',
+    'div[role="search"] [contenteditable="true"]'
   ],
   sidebarChatRows: [
     '#pane-side [role="listitem"]',
@@ -126,11 +127,14 @@ async function waitForElement(selectors, timeoutMs = 25000, pollMs = 250, root =
   return null;
 }
 
-async function ensureWhatsAppReady() {
+async function ensureWhatsAppReady({ requireSearch = false } = {}) {
   const app = await waitForElement(SELECTORS.appReady, 25000);
   if (!app) throw new Error('WhatsApp UI not loaded yet.');
   const paneSide = await waitForElement(SELECTORS.paneSide, 30000);
   if (!paneSide) throw new Error('WhatsApp chat list is not ready yet (#pane-side missing).');
+
+  if (!requireSearch) return { app, paneSide, search: null };
+
   const search = await waitForElement(SELECTORS.chatSearchInputs, 30000);
   if (!search) throw new Error('Unable to locate WhatsApp search input in sidebar.');
   return { app, paneSide, search };
@@ -159,20 +163,45 @@ function detectChatTypeFromRow(row) {
   };
 }
 
-async function gatherSidebarData() {
-  await ensureWhatsAppReady();
-  const rows = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((row) => row.textContent?.trim());
-  const map = new Map();
+async function collectSidebarRows(paneSide) {
+  const discovered = new Map();
+  let unchanged = 0;
+  let previousSize = 0;
 
-  rows.forEach((row) => {
-    const chat = detectChatTypeFromRow(row);
-    const key = `${chat.name}|${chat.phone}`;
-    if (!map.has(key)) {
-      map.set(key, chat);
+  paneSide.scrollTop = 0;
+  await wait(250);
+
+  for (let i = 0; i < 60; i += 1) {
+    const visibleRows = queryAllWithFallback(SELECTORS.sidebarChatRows, paneSide).filter((row) => row.textContent?.trim());
+
+    visibleRows.forEach((row) => {
+      const chat = detectChatTypeFromRow(row);
+      const key = `${chat.name}|${chat.phone}`;
+      if (!discovered.has(key)) discovered.set(key, chat);
+    });
+
+    paneSide.scrollTop = paneSide.scrollHeight;
+    await wait(220);
+
+    if (discovered.size === previousSize) {
+      unchanged += 1;
+      if (unchanged >= 6) break;
+    } else {
+      unchanged = 0;
     }
-  });
 
-  const chats = [...map.values()];
+    previousSize = discovered.size;
+  }
+
+  paneSide.scrollTop = 0;
+  await wait(120);
+
+  return [...discovered.values()];
+}
+
+async function gatherSidebarData() {
+  const { paneSide } = await ensureWhatsAppReady();
+  const chats = await collectSidebarRows(paneSide);
   const groups = chats.filter((c) => c.isGroup).map((c) => c.name).sort((a, b) => a.localeCompare(b));
   const labels = [];
   const countryCodes = [...new Set(chats.map((c) => c.countryCode).filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -200,7 +229,7 @@ async function openChatBySearch(queryValue) {
   const query = String(queryValue || '').trim();
   if (!query) throw new Error('Missing contact/group search query.');
 
-  await ensureWhatsAppReady();
+  await ensureWhatsAppReady({ requireSearch: true });
   const searchBox = await waitForElement(SELECTORS.chatSearchInputs, 12000);
   if (!searchBox) throw new Error('Search box not found in WhatsApp sidebar.');
 

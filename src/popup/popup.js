@@ -4,6 +4,7 @@ const ui = {
   primaryFilter: document.getElementById('primaryFilter'),
   secondaryFilter: document.getElementById('secondaryFilter'),
   fetchContactsBtn: document.getElementById('fetchContactsBtn'),
+  startFromStorageBtn: document.getElementById('startFromStorageBtn'),
   openDashboardBtn: document.getElementById('openDashboardBtn'),
   statusText: document.getElementById('statusText'),
   latestLog: document.getElementById('latestLog')
@@ -105,6 +106,30 @@ async function fetchSnapshot() {
   return true;
 }
 
+
+async function startSendingFromDashboardRows() {
+  setStatus('Starting campaign...');
+
+  try {
+    await ensureActiveWhatsAppTab();
+  } catch (error) {
+    setStatus(error.message, true);
+    ui.latestLog.textContent = JSON.stringify({ success: false, error: error.message }, null, 2);
+    return;
+  }
+
+  const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.START_CAMPAIGN_FROM_STORAGE));
+  if (!response?.success) {
+    setStatus(`Start failed: ${response?.error || 'Unknown error'}`, true);
+    ui.latestLog.textContent = JSON.stringify(response, null, 2);
+    return;
+  }
+
+  const total = response.progress?.total || 0;
+  setStatus(`Campaign started: ${total} row(s).`);
+  ui.latestLog.textContent = JSON.stringify({ action: ACTIONS.START_CAMPAIGN_FROM_STORAGE, progress: response.progress }, null, 2);
+}
+
 async function fetchContacts() {
   setStatus('Sending...');
 
@@ -154,6 +179,7 @@ ui.openDashboardBtn.addEventListener('click', async () => {
 });
 
 ui.fetchContactsBtn.addEventListener('click', fetchContacts);
+ui.startFromStorageBtn?.addEventListener('click', startSendingFromDashboardRows);
 ui.primaryFilter.addEventListener('change', refreshSecondaryFilter);
 
 chrome.storage.onChanged.addListener((changes, area) => {
