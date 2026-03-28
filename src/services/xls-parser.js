@@ -123,39 +123,9 @@ function isHeaderRow(row = []) {
   return /mobile|phone|whatsapp|message|template|sr/.test(joined);
 }
 
-export async function parseWorkbook(file) {
-  if (!window.XLSX) {
-    throw new Error('SheetJS (XLSX) is not loaded.');
-  }
-
-  const arrayBuffer = await file.arrayBuffer();
-  const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-
-  const rows = window.XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: '',
-    raw: true
-  });
-
-  if (!rows.length) {
-    return [];
-  }
-
-  const firstRow = normalizeRowArray(rows[0]);
-  const headerDetected = isHeaderRow(firstRow);
-  let indexes = detectColumnIndexes(firstRow);
-
-  if (!headerDetected) {
-    indexes = inferColumnIndexesFromData(rows, indexes);
-  }
-
-  if (headerDetected) {
-    console.log('[WA CRM][XLS] Header row detected and skipped:', rows[0], indexes);
-  }
-
+function parseRows(rows = [], indexes = {}, { headerDetected = false } = {}) {
   const output = [];
+
   for (let index = 0; index < rows.length; index += 1) {
     if (headerDetected && index === 0) continue;
 
@@ -199,12 +169,112 @@ export async function parseWorkbook(file) {
     output.push(parsedRow);
   }
 
-  console.log('[WA CRM][XLS] Import summary:', {
-    totalRows: rows.length,
-    importedRows: output.length,
-    headerDetected,
-    indexes
+  return output;
+}
+
+function parseSheetRows(rows = [], sheetName = 'Unknown') {
+  if (!rows.length) {
+    return {
+      output: [],
+      headerDetected: false,
+      indexes: detectColumnIndexes([]),
+      totalRows: 0
+    };
+  }
+
+  const firstRow = normalizeRowArray(rows[0]);
+  const headerDetected = isHeaderRow(firstRow);
+  let indexes = detectColumnIndexes(firstRow);
+
+  if (!headerDetected) {
+    indexes = inferColumnIndexesFromData(rows, indexes);
+  }
+
+  if (headerDetected) {
+    console.log('[WA CRM][XLS] Header row detected and skipped:', { sheetName, headerRow: rows[0], indexes });
+  }
+
+  let output = parseRows(rows, indexes, { headerDetected });
+
+  // Some sheets include a title row with words like "phone" which can be misdetected
+  // as a real header. If that happens and import result is empty, retry with inferred indexes.
+  if (!output.length && rows.length > 1) {
+    const fallbackIndexes = inferColumnIndexesFromData(rows.slice(1), indexes);
+    const fallbackOutput = parseRows(rows, fallbackIndexes, { headerDetected });
+
+    if (fallbackOutput.length) {
+      console.warn('[WA CRM][XLS] Recovered import with fallback column inference:', {
+        sheetName,
+        previousIndexes: indexes,
+        fallbackIndexes
+      });
+      indexes = fallbackIndexes;
+      output = fallbackOutput;
+    }
+  }
+
+  return { output, headerDetected, indexes, totalRows: rows.length };
+}
+
+export async function parseWorkbook(file) {
+  if (!window.XLSX) {
+    throw new Error('SheetJS (XLSX) is not loaded.');
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
+  const sheetNames = Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
+
+  if (!sheetNames.length) {
+    return [];
+  }
+
+  const sheetSummaries = [];
+  let bestResult = null;
+
+  sheetNames.forEach((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) return;
+
+    const rows = window.XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: '',
+      raw: true
+    });
+
+    const result = parseSheetRows(rows, sheetName);
+    sheetSummaries.push({
+      sheetName,
+      totalRows: result.totalRows,
+      importedRows: result.output.length,
+      headerDetected: result.headerDetected,
+      indexes: result.indexes
+    });
+
+    if (!bestResult || result.output.length > bestResult.output.length) {
+      bestResult = { ...result, sheetName };
+    }
   });
 
-  return output;
+  if (!bestResult) {
+    return [];
+  }
+
+  console.log('[WA CRM][XLS] Workbook sheet scan summary:', sheetSummaries);
+
+  if (!bestResult.output.length) {
+    console.warn('[WA CRM][XLS] No valid contacts detected in any sheet.', {
+      scannedSheets: sheetSummaries.map((entry) => entry.sheetName)
+    });
+  }
+
+  console.log('[WA CRM][XLS] Import summary:', {
+    sheetName: bestResult.sheetName,
+    totalRows: bestResult.totalRows,
+    importedRows: bestResult.output.length,
+    headerDetected: bestResult.headerDetected,
+    indexes: bestResult.indexes
+  });
+
+  return bestResult.output;
 }
