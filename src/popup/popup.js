@@ -82,6 +82,13 @@ function escapeCsvValue(value) {
   return normalized;
 }
 
+function excelTextValue(value) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return '';
+  const escaped = normalized.replace(/"/g, '""');
+  return `="${escaped}"`;
+}
+
 function downloadContactFormatWithName() {
   if (!latestFetchedContacts.length) {
     setStatus('No synchronized contacts available to download.', true);
@@ -89,13 +96,19 @@ function downloadContactFormatWithName() {
   }
 
   const headers = ['Sr No', 'Mobile Number', 'Name', 'Message Template', 'Attachment URL'];
-  const rows = latestFetchedContacts.map((contact, index) => [
-    index + 1,
-    contact.phone || '',
-    contact.name || '',
-    'Hello {{name}}',
-    ''
-  ]);
+  const selectedGroupName = ui.primaryFilter.value === 'group' ? (ui.secondaryFilter.value || '') : '';
+  const rows = latestFetchedContacts.map((contact, index) => {
+    const normalizedPhone = String(contact.phone || '').replace(/\s+/g, '');
+    const normalizedName = String(contact.name || '').replace(/\s+/g, ' ').trim();
+
+    return [
+      index + 1,
+      excelTextValue(normalizedPhone),
+      excelTextValue(normalizedName),
+      selectedGroupName || 'Hello {{name}}',
+      ''
+    ];
+  });
 
   const csv = [headers, ...rows]
     .map((row) => row.map((cell) => escapeCsvValue(cell)).join(','))
@@ -105,8 +118,9 @@ function downloadContactFormatWithName() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   const timestamp = new Date().toISOString().slice(0, 10);
+  const safeGroupName = selectedGroupName.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
   link.href = url;
-  link.download = `wa-synced-contacts-with-name-${timestamp}.csv`;
+  link.download = `wa-synced-contacts-with-name${safeGroupName ? `-${safeGroupName}` : ''}-${timestamp}.csv`;
   document.body.appendChild(link);
   link.click();
   link.remove();
