@@ -7,7 +7,7 @@ export const DEFAULT_SETTINGS = {
   randomDelayEnabled: true,
   maxMessagesPerSession: 250,
   attachmentSendingEnabled: true,
-  defaultTemplate: 'Hello {{number}}, your ID is {{sr_no}}',
+  defaultTemplate: 'Hello World',
   maxRetries: 2
 };
 

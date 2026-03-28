@@ -16,6 +16,19 @@ function normalizeCell(value) {
   return String(value).trim();
 }
 
+
+function normalizeRowArray(row) {
+  if (Array.isArray(row)) return row;
+  if (!row || typeof row !== 'object') return [];
+
+  const entries = Object.entries(row)
+    .filter(([key]) => /^\d+$/.test(String(key)))
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([, value]) => value);
+
+  return entries;
+}
+
 function normalizeHeader(value) {
   return normalizeCell(value)
     .toLowerCase()
@@ -24,7 +37,8 @@ function normalizeHeader(value) {
 }
 
 function detectColumnIndexes(headerRow = []) {
-  const normalized = headerRow.map(normalizeHeader);
+  const row = normalizeRowArray(headerRow);
+  const normalized = row.map(normalizeHeader);
 
   const findColumn = (patterns = [], fallbackIndex = -1) => {
     const index = normalized.findIndex((value) => patterns.some((pattern) => pattern.test(value)));
@@ -41,7 +55,7 @@ function detectColumnIndexes(headerRow = []) {
 }
 
 function isHeaderRow(row = []) {
-  const joined = row.map(normalizeHeader).filter(Boolean).join('|');
+  const joined = normalizeRowArray(row).map(normalizeHeader).filter(Boolean).join('|');
   return /mobile|phone|whatsapp|message|template|sr/.test(joined);
 }
 
@@ -65,8 +79,9 @@ export async function parseWorkbook(file) {
     return [];
   }
 
-  const headerDetected = isHeaderRow(rows[0]);
-  const indexes = detectColumnIndexes(rows[0]);
+  const firstRow = normalizeRowArray(rows[0]);
+  const headerDetected = isHeaderRow(firstRow);
+  const indexes = detectColumnIndexes(firstRow);
 
   if (headerDetected) {
     console.log('[WA CRM][XLS] Header row detected and skipped:', rows[0], indexes);
@@ -76,7 +91,7 @@ export async function parseWorkbook(file) {
   for (let index = 0; index < rows.length; index += 1) {
     if (headerDetected && index === 0) continue;
 
-    const row = Array.isArray(rows[index]) ? rows[index] : [];
+    const row = normalizeRowArray(rows[index]);
     const isCompletelyEmpty = row.every((cell) => normalizeCell(cell) === '');
     if (isCompletelyEmpty) continue;
 
