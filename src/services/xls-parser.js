@@ -38,15 +38,40 @@ export async function parseWorkbook(file) {
     const isCompletelyEmpty = row.every((cell) => normalizeCell(cell) === '');
     if (isCompletelyEmpty) continue;
 
-    const srNo = normalizeCell(row[0]) || String(output.length + 1);
-    const mobileNumber = toDigits(row[1]);
-    const messageTemplate = normalizeCell(row[2]);
-
-    if (!mobileNumber) {
-      throw new Error(`Row ${index + 1}: mobile number is required.`);
+    // Expected format:
+    // [0] Sr No | [1] Mobile Number | [2] Message
+    // Skip header row even when values are styled/capitalized differently.
+    if (index === 0) {
+      const headerSr = normalizeCell(row[0]).toLowerCase();
+      const headerMobile = normalizeCell(row[1]).toLowerCase();
+      const headerMessage = normalizeCell(row[2]).toLowerCase();
+      const hasExpectedHeaders =
+        headerSr.includes('sr') &&
+        headerMobile.includes('mobile') &&
+        (headerMessage.includes('message') || headerMessage.includes('msg'));
+      if (hasExpectedHeaders) {
+        console.log('[WA CRM][XLS] Header row detected and skipped:', row);
+        continue;
+      }
     }
 
-    output.push({
+    const srNo = normalizeCell(row[0]) || String(output.length + 1);
+    const mobileRaw = normalizeCell(row[1]);
+    const mobileNumber = toDigits(String(mobileRaw));
+    const messageTemplate = normalizeCell(row[2]);
+
+    if (!mobileNumber || !isValidPhone(mobileNumber)) {
+      console.warn('[WA CRM][XLS] Ignoring invalid row:', {
+        rowNumber: index + 1,
+        srNo,
+        mobileRaw,
+        mobileNumber,
+        messageTemplate
+      });
+      continue;
+    }
+
+    const parsedRow = {
       id: `row-${index}-${Date.now()}`,
       srNo,
       mobileNumber,
@@ -58,8 +83,16 @@ export async function parseWorkbook(file) {
         rowNumber: index + 1,
         source: row
       }
-    });
+    };
+
+    console.log('[WA CRM][XLS] Parsed row:', parsedRow);
+    output.push(parsedRow);
   }
+
+  console.log('[WA CRM][XLS] Import summary:', {
+    totalRows: rows.length,
+    importedRows: output.length
+  });
 
   return output;
 }

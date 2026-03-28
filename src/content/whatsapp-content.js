@@ -1,5 +1,10 @@
 import { ACTIONS, getAction } from '../shared/actions.js';
 
+if (window.__WA_CRM_CONTENT_SCRIPT_READY__) {
+  console.log('[WA CRM][Content] Duplicate injection ignored.');
+} else {
+  window.__WA_CRM_CONTENT_SCRIPT_READY__ = true;
+
 const SELECTORS = {
   appReady: ['#app'],
   paneSide: ['#pane-side'],
@@ -416,3 +421,4 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return true;
 });
+}
