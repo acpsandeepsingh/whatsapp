@@ -716,6 +716,9 @@ async function scrapeGroupContacts(groupName) {
 
   let unchangedScrolls = 0;
   let previousCount = 0;
+  let direction = 1;
+
+  const scroller = findBestMemberScroller(panel) || panel;
 
   for (let i = 0; i < 45; i += 1) {
     const rows = queryAllWithFallback(SELECTORS.participantRows, panel).filter(isValidParticipantRow);
@@ -732,9 +735,15 @@ async function scrapeGroupContacts(groupName) {
 
     if (discovered.size === previousCount) {
       unchangedScrolls += 1;
-      if (unchangedScrolls >= 5) break;
+      if (unchangedScrolls >= 12) break;
     } else {
       unchangedScrolls = 0;
+    }
+
+    if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8) {
+      direction = -1;
+    } else if (scroller.scrollTop <= 8) {
+      direction = 1;
     }
 
     previousCount = discovered.size;
