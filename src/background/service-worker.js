@@ -20,6 +20,15 @@ const state = {
   injectedTabs: new Set()
 };
 
+const contactFetchState = {
+  running: false,
+  action: '',
+  startedAt: null,
+  completedAt: null,
+  lastResult: null,
+  activePromise: null
+};
+
 function isWhatsAppWebUrl(url) {
   return /^https:\/\/web\.whatsapp\.com(\/|$)/.test(String(url || ''));
 }
@@ -108,6 +117,60 @@ async function sendToContent(message) {
   const tab = await getWhatsAppTab();
   await ensureContentReady(tab.id);
   return sendTabMessage(tab.id, message);
+}
+
+async function persistContactFetchState() {
+  await chrome.storage.local.set({
+    contactFetchState: {
+      running: contactFetchState.running,
+      action: contactFetchState.action,
+      startedAt: contactFetchState.startedAt,
+      completedAt: contactFetchState.completedAt
+    },
+    lastContactsFetchResult: contactFetchState.lastResult
+  });
+}
+
+async function runOrRecoverContactFetch(action, payloadFactory) {
+  if (contactFetchState.running && contactFetchState.activePromise) {
+    const recoveredResult = await contactFetchState.activePromise;
+    return { ...recoveredResult, recovered: true };
+  }
+
+  contactFetchState.running = true;
+  contactFetchState.action = action;
+  contactFetchState.startedAt = Date.now();
+  contactFetchState.completedAt = null;
+  await persistContactFetchState();
+
+  contactFetchState.activePromise = (async () => {
+    const result = await sendToContent(payloadFactory());
+    if (!result?.success) {
+      throw new Error(result?.error || 'Contact fetch failed.');
+    }
+    contactFetchState.lastResult = {
+      ...result,
+      action,
+      startedAt: contactFetchState.startedAt,
+      completedAt: Date.now()
+    };
+    return contactFetchState.lastResult;
+  })();
+
+  try {
+    const result = await contactFetchState.activePromise;
+    contactFetchState.running = false;
+    contactFetchState.completedAt = Date.now();
+    await persistContactFetchState();
+    return { ...result, recovered: false };
+  } catch (error) {
+    contactFetchState.running = false;
+    contactFetchState.completedAt = Date.now();
+    await persistContactFetchState();
+    throw error;
+  } finally {
+    contactFetchState.activePromise = null;
+  }
 }
 
 function getProgress() {
@@ -290,7 +353,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.FETCH_CONTACTS: {
-        const result = await sendToContent(
+        const result = await runOrRecoverContactFetch(ACTIONS.FETCH_CONTACTS, () =>
           createMessage(ACTIONS.FETCH_CONTACTS, {
             filter: message.filter || null,
             chats: message.chats || []
@@ -300,8 +363,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.SCRAPE_GROUP: {
-        const result = await sendToContent(createMessage(ACTIONS.SCRAPE_GROUP, { groupName: message.groupName || '' }));
+        const result = await runOrRecoverContactFetch(ACTIONS.SCRAPE_GROUP, () =>
+          createMessage(ACTIONS.SCRAPE_GROUP, { groupName: message.groupName || '' })
+        );
         sendResponse(result);
+        break;
+      }
+      case ACTIONS.GET_CONTACT_FETCH_STATE: {
+        sendResponse({
+          success: true,
+          running: contactFetchState.running,
+          action: contactFetchState.action,
+          startedAt: contactFetchState.startedAt,
+          completedAt: contactFetchState.completedAt,
+          lastResult: contactFetchState.lastResult
+        });
+        break;
+      }
+      case ACTIONS.WAIT_FOR_CONTACT_FETCH_RESULT: {
+        if (contactFetchState.running && contactFetchState.activePromise) {
+          const result = await contactFetchState.activePromise;
+          sendResponse({ ...result, recovered: true, success: true });
+          break;
+        }
+        if (contactFetchState.lastResult) {
+          sendResponse({ ...contactFetchState.lastResult, recovered: true, success: true });
+          break;
+        }
+        sendResponse({ success: false, error: 'No running or previous contact fetch found.' });
         break;
       }
       case ACTIONS.OPEN_CHAT: {

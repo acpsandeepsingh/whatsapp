@@ -5,12 +5,14 @@ const ui = {
   secondaryFilter: document.getElementById('secondaryFilter'),
   fetchContactsBtn: document.getElementById('fetchContactsBtn'),
   downloadContactsBtn: document.getElementById('downloadContactsBtn'),
+  closePopupBtn: document.getElementById('closePopupBtn'),
   startFromStorageBtn: document.getElementById('startFromStorageBtn'),
   openDashboardBtn: document.getElementById('openDashboardBtn'),
   statusText: document.getElementById('statusText'),
   latestLog: document.getElementById('latestLog')
 };
 
+const POPUP_STATE_KEY = 'popupUiState';
 let chatSnapshot = { groups: [], countryCodes: [] };
 let latestFetchedContacts = [];
 
@@ -23,6 +25,53 @@ const CHAT_SCOPE_OPTIONS = [
 function setStatus(text, isError = false) {
   ui.statusText.textContent = text;
   ui.statusText.style.color = isError ? '#fecaca' : '#93c5fd';
+}
+
+async function persistPopupState() {
+  await chrome.storage.local.set({
+    [POPUP_STATE_KEY]: {
+      primaryFilter: ui.primaryFilter.value,
+      secondaryFilter: ui.secondaryFilter.value,
+      statusText: ui.statusText.textContent,
+      latestLog: ui.latestLog.textContent,
+      latestFetchedContacts,
+      updatedAt: Date.now()
+    }
+  });
+}
+
+async function restorePopupState() {
+  const stored = await chrome.storage.local.get([POPUP_STATE_KEY, 'lastContactsFetchResult']);
+  const popupState = stored[POPUP_STATE_KEY] || {};
+  const lastContactsFetchResult = stored.lastContactsFetchResult || {};
+
+  if (popupState.primaryFilter) ui.primaryFilter.value = popupState.primaryFilter;
+  refreshSecondaryFilter();
+
+  if (popupState.secondaryFilter && !ui.secondaryFilter.disabled) {
+    const hasOption = [...ui.secondaryFilter.options].some((option) => option.value === popupState.secondaryFilter);
+    if (hasOption) ui.secondaryFilter.value = popupState.secondaryFilter;
+  }
+
+  const restoredContacts =
+    (Array.isArray(popupState.latestFetchedContacts) && popupState.latestFetchedContacts) ||
+    (Array.isArray(lastContactsFetchResult.data) && lastContactsFetchResult.data) ||
+    [];
+
+  latestFetchedContacts = restoredContacts;
+  ui.downloadContactsBtn.classList.toggle('hidden', !latestFetchedContacts.length);
+
+  if (popupState.statusText) {
+    setStatus(popupState.statusText, false);
+  } else if (lastContactsFetchResult.completedAt) {
+    setStatus(`Recovered previous contacts: ${restoredContacts.length}`);
+  }
+
+  if (popupState.latestLog) {
+    ui.latestLog.textContent = popupState.latestLog;
+  } else if (lastContactsFetchResult.completedAt) {
+    ui.latestLog.textContent = JSON.stringify(lastContactsFetchResult, null, 2);
+  }
 }
 
 function escapeCsvValue(value) {
@@ -64,6 +113,7 @@ function downloadContactFormatWithName() {
   URL.revokeObjectURL(url);
 
   setStatus(`Downloaded ${latestFetchedContacts.length} contacts in requested format.`);
+  persistPopupState();
 }
 
 function buildSecondaryOptions(values, placeholder = 'Select value') {
@@ -166,44 +216,27 @@ async function fetchGroupsForSecondaryFilter() {
   refreshSecondaryFilter();
 }
 
-
-async function startSendingFromDashboardRows() {
-  setStatus('Starting campaign...');
-
-  try {
-    await ensureActiveWhatsAppTab();
-  } catch (error) {
-    setStatus(error.message, true);
-    ui.latestLog.textContent = JSON.stringify({ success: false, error: error.message }, null, 2);
-    return;
-  }
-
-  const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.START_CAMPAIGN_FROM_STORAGE));
-  if (!response?.success) {
-    setStatus(`Start failed: ${response?.error || 'Unknown error'}`, true);
-    ui.latestLog.textContent = JSON.stringify(response, null, 2);
-    return;
-  }
-
-  const total = response.progress?.total || 0;
-  setStatus(`Campaign started: ${total} row(s).`);
-  ui.latestLog.textContent = JSON.stringify({ action: ACTIONS.START_CAMPAIGN_FROM_STORAGE, progress: response.progress }, null, 2);
-}
-
 async function fetchContacts() {
+  ui.fetchContactsBtn.disabled = true;
   setStatus('Capturing contacts...');
 
   try {
     await ensureActiveWhatsAppTab();
   } catch (error) {
+    ui.fetchContactsBtn.disabled = false;
     setStatus(error.message, true);
     ui.latestLog.textContent = JSON.stringify({ success: false, error: error.message }, null, 2);
+    await persistPopupState();
     return;
   }
 
   const selectedPrimary = ui.primaryFilter.value;
   if (selectedPrimary !== 'popup_contacts') {
-    if (!(await fetchSnapshot())) return;
+    if (!(await fetchSnapshot())) {
+      ui.fetchContactsBtn.disabled = false;
+      await persistPopupState();
+      return;
+    }
   }
 
   const payload =
@@ -217,10 +250,12 @@ async function fetchContacts() {
         });
 
   const response = await chrome.runtime.sendMessage(payload);
+  ui.fetchContactsBtn.disabled = false;
 
   if (!response?.success) {
     setStatus('Error', true);
     ui.latestLog.textContent = `Fetch failed: ${response?.error || 'Unknown error'}`;
+    await persistPopupState();
     return;
   }
 
@@ -228,13 +263,16 @@ async function fetchContacts() {
   latestFetchedContacts = response.data || [];
   ui.downloadContactsBtn.classList.toggle('hidden', !count);
   setStatus(
-    selectedPrimary === 'popup_contacts'
-      ? `Popup capture complete: ${count} contacts`
-      : `Success: ${count} contacts`
+    response?.recovered
+      ? `Recovered running fetch: ${count} contacts`
+      : selectedPrimary === 'popup_contacts'
+        ? `Popup capture complete: ${count} contacts`
+        : `Success: ${count} contacts`
   );
   ui.latestLog.textContent = JSON.stringify(
     {
       action: selectedPrimary === 'popup_contacts' ? ACTIONS.SCRAPE_GROUP : ACTIONS.FETCH_CONTACTS,
+      recovered: Boolean(response?.recovered),
       filter: {
         primary: selectedPrimary,
         secondary: ui.secondaryFilter.value
@@ -244,16 +282,42 @@ async function fetchContacts() {
     null,
     2
   );
+
+  await persistPopupState();
 }
 
-// Message send/dashboard flow temporarily disabled as requested.
-// ui.openDashboardBtn.addEventListener('click', async () => {
-//   await chrome.runtime.openOptionsPage();
-// });
+async function restoreRunningOrPreviousState() {
+  const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.GET_CONTACT_FETCH_STATE));
+  if (!response?.success) return;
+
+  if (response.running) {
+    setStatus('Recovered running fetch job...');
+    ui.fetchContactsBtn.disabled = true;
+    const recovered = await chrome.runtime.sendMessage(createMessage(ACTIONS.WAIT_FOR_CONTACT_FETCH_RESULT));
+    ui.fetchContactsBtn.disabled = false;
+    if (recovered?.success && Array.isArray(recovered.data)) {
+      latestFetchedContacts = recovered.data;
+      ui.downloadContactsBtn.classList.toggle('hidden', !latestFetchedContacts.length);
+      setStatus(`Recovered completed fetch: ${latestFetchedContacts.length} contacts`);
+      ui.latestLog.textContent = JSON.stringify({ recovered: true, contacts: recovered.data.slice(0, 8) }, null, 2);
+      await persistPopupState();
+    }
+    return;
+  }
+
+  if (Array.isArray(response.lastResult?.data) && response.lastResult.data.length) {
+    latestFetchedContacts = response.lastResult.data;
+    ui.downloadContactsBtn.classList.toggle('hidden', false);
+    setStatus(`Loaded previous contacts: ${latestFetchedContacts.length}`);
+    ui.latestLog.textContent = JSON.stringify({ restored: true, ...response.lastResult }, null, 2);
+    await persistPopupState();
+  }
+}
 
 ui.fetchContactsBtn.addEventListener('click', fetchContacts);
 ui.downloadContactsBtn?.addEventListener('click', downloadContactFormatWithName);
-// ui.startFromStorageBtn?.addEventListener('click', startSendingFromDashboardRows);
+ui.closePopupBtn?.addEventListener('click', () => window.close());
+
 ui.primaryFilter.addEventListener('change', async () => {
   if (ui.primaryFilter.value !== 'popup_contacts' && !chatSnapshot.groups.length && !chatSnapshot.countryCodes.length) {
     await fetchSnapshot();
@@ -261,10 +325,14 @@ ui.primaryFilter.addEventListener('change', async () => {
 
   if (ui.primaryFilter.value === 'group') {
     await fetchGroupsForSecondaryFilter();
+    await persistPopupState();
     return;
   }
   refreshSecondaryFilter();
+  await persistPopupState();
 });
+
+ui.secondaryFilter.addEventListener('change', persistPopupState);
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
@@ -286,6 +354,8 @@ chrome.runtime.onMessage.addListener((message) => {
 
 (async function init() {
   await loadSettings();
-  ui.primaryFilter.value = 'popup_contacts';
+  ui.primaryFilter.value = ui.primaryFilter.value || 'popup_contacts';
   refreshSecondaryFilter();
+  await restorePopupState();
+  await restoreRunningOrPreviousState();
 })();
