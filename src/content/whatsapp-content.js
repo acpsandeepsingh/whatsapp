@@ -536,27 +536,6 @@ function isValidParticipantRow(row) {
   return words.length >= 1 && words.length <= 8;
 }
 
-function cleanText(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim();
-}
-
-function hasMemberLikeText(value) {
-  const text = cleanText(value).toLowerCase();
-  if (!text) return false;
-  if (/view all|member changes|group settings|media|links|docs|starred|forwarded|type a message|exit group|report group|clear chat|kept messages/.test(text)) {
-    return false;
-  }
-
-  const lines = String(value || '')
-    .split('\n')
-    .map((line) => cleanText(line))
-    .filter(Boolean);
-
-  if (lines.length > 3) return false;
-  if (text.length > 140) return false;
-  return Boolean(extractPhoneFromText(text) || /group admin/.test(text) || /^~/.test(text));
-}
-
 function isLikelyPhoneText(value) {
   const digits = normalizePhone(value);
   return digits.length >= 7;
@@ -672,42 +651,19 @@ async function openGroupInfo(groupName) {
 
 async function openViewAllMembersDialog(root = document) {
   const candidateButtons = [...root.querySelectorAll('[role="button"], button, [tabindex="0"]')];
+  const viewAll = candidateButtons.find((node) => /view all\s*\(\d+\s*more\)|view all|see all/i.test(cleanText(node.textContent)));
+  if (!viewAll) return null;
 
-  const membersSearchButton = candidateButtons.find((node) => {
-    const label = `${node.getAttribute('aria-label') || ''} ${node.getAttribute('title') || ''} ${node.textContent || ''}`;
-    return /members?.*search members|search members/i.test(cleanText(label));
-  });
+  (viewAll.closest('[role="button"],button') || viewAll).click();
+  await wait(700);
 
-  if (membersSearchButton) {
-    (membersSearchButton.closest('[role="button"],button') || membersSearchButton).click();
-    await wait(700);
-  }
-
-  const findMembersDialog = () => {
-    const bySearchInput = [...document.querySelectorAll('input[aria-label*="Search contacts" i], input[title*="Search contacts" i]')]
-      .map((input) => input.closest('[role="dialog"]'))
-      .find(Boolean);
-    if (bySearchInput) return bySearchInput;
-
-    const dialogs = [...document.querySelectorAll('[role="dialog"]')];
-    return (
-      dialogs.reverse().find((dialog) => {
-        const text = cleanText(dialog.innerText || '');
-        return /members?|add member|view all|search contacts/i.test(text);
-      }) || null
-    );
-  };
-
-  let dialog = findMembersDialog();
-  const viewAllInDialog = [...(dialog || root).querySelectorAll('[role="button"], button, div[role="button"]')]
-    .find((node) => /view all\s*\(\d+\s*more\)|view all|see all/i.test(cleanText(node.textContent || '')));
-  if (viewAllInDialog) {
-    (viewAllInDialog.closest('[role="button"],button') || viewAllInDialog).click();
-    await wait(900);
-    dialog = findMembersDialog();
-  }
-
-  return dialog;
+  const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+  return (
+    dialogs.reverse().find((dialog) => {
+      const text = cleanText(dialog.innerText || '');
+      return /members?|add member|view all/i.test(text);
+    }) || null
+  );
 }
 
 function findBestMemberScroller(root) {
@@ -752,12 +708,10 @@ async function scrapeGroupContacts(groupName) {
     await openGroupInfo(groupName);
   }
 
-  const participantsPanel = await waitForElement(SELECTORS.participantsContainer, 12000);
-  if (!participantsPanel) {
+  const panel = await waitForElement(SELECTORS.participantsContainer, 12000);
+  if (!panel) {
     throw new Error('Participants list not found. Open a group info panel before scraping.');
   }
-  const membersDialog = await openViewAllMembersDialog(participantsPanel);
-  const panel = membersDialog || participantsPanel;
   const discovered = new Map();
 
   let unchangedScrolls = 0;
@@ -766,7 +720,7 @@ async function scrapeGroupContacts(groupName) {
 
   const scroller = findBestMemberScroller(panel) || panel;
 
-  for (let i = 0; i < 70; i += 1) {
+  for (let i = 0; i < 45; i += 1) {
     const rows = queryAllWithFallback(SELECTORS.participantRows, panel).filter(isValidParticipantRow);
     rows.forEach((row) => {
       const contact = readContactFromRow(row);
@@ -776,8 +730,8 @@ async function scrapeGroupContacts(groupName) {
     });
     collectVisibleMembersFromPanel(panel, discovered);
 
-    scroller.scrollTop += direction * 260;
-    await wait(membersDialog ? 1100 : 450);
+    scroller.scrollTop = scroller.scrollHeight;
+    await wait(membersDialog ? 900 : 400);
 
     if (discovered.size === previousCount) {
       unchangedScrolls += 1;
