@@ -12,6 +12,7 @@
 
       <label for="primaryFilter">Contact Filter</label>
       <select id="primaryFilter">
+        <option value="popup_contacts">WhatsApp Popup Contacts</option>
         <option value="all_contacts">All Contacts</option>
         <option value="group">Group</option>
         <option value="country">Country</option>
@@ -28,11 +29,10 @@
         <button id="downloadContactsBtn" class="secondary hidden">Download Contacts Format (with Name)</button>
       </section>
 
-      <section class="status-card">
-        <h2>Message Send Area</h2>
-        <button id="startFromStorageBtn">Start Sending Msg</button>
-        <button id="openDashboardBtn" class="secondary">Open Dashboard</button>
-      </section>
+      <!--
+        Message Send Area temporarily disabled.
+        User requested to keep only contact-capture flow from WhatsApp popup.
+      -->
 
       <section class="status-card">
         <p id="statusText">Idle</p>
