@@ -765,7 +765,7 @@ async function scrapeGroupContacts(groupName) {
     await openGroupInfo(groupName);
   }
 
-  const popupDialog = await ensureMembersPopupOpen(document);
+  const popupDialog = (await openViewAllMembersDialog(document)) || getWaPopoverBucketDialog();
   if (!popupDialog) {
     throw new Error('Popup not found under #wa-popovers-bucket. Open "View all" members popup first.');
   }
@@ -778,8 +778,8 @@ async function scrapeGroupContacts(groupName) {
   let previousCount = 0;
   let keepCurrentContextMisses = 0;
 
-  for (let i = 0; i < 120; i += 1) {
-    const activePopup = (await ensureMembersPopupOpen(document)) || getWaPopoverBucketDialog() || getSearchMembersPopup();
+  for (let i = 0; i < 45; i += 1) {
+    const activePopup = getWaPopoverBucketDialog() || getSearchMembersPopup();
     const activePanel = activePopup || panel;
     if (!activePanel) {
       keepCurrentContextMisses += 1;
@@ -819,7 +819,7 @@ async function scrapeGroupContacts(groupName) {
 
   const unresolvedContacts = [...discovered.entries()].filter(([, contact]) => !contact.phone);
   for (const [key, contact] of unresolvedContacts) {
-    const currentPanel = (await ensureMembersPopupOpen(document)) || getWaPopoverBucketDialog() || getSearchMembersPopup() || panel;
+    const currentPanel = getWaPopoverBucketDialog() || getSearchMembersPopup() || panel;
     const rows = queryAllWithFallback(SELECTORS.participantRows, currentPanel)
       .filter(isValidParticipantRow)
       .filter((row) => (row.textContent || '').includes(contact.name));

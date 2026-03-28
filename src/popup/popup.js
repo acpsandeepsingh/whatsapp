@@ -201,8 +201,9 @@ async function fetchContacts() {
     return;
   }
 
+  if (!(await fetchSnapshot())) return;
+
   const selectedPrimary = ui.primaryFilter.value;
-  if (selectedPrimary !== 'popup_contacts' && !(await fetchSnapshot())) return;
   const payload =
     selectedPrimary === 'popup_contacts'
       ? createMessage(ACTIONS.SCRAPE_GROUP)
@@ -283,6 +284,7 @@ chrome.runtime.onMessage.addListener((message) => {
 
 (async function init() {
   await loadSettings();
+  await fetchSnapshot();
   ui.primaryFilter.value = 'popup_contacts';
   refreshSecondaryFilter();
 })();
