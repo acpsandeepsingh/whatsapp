@@ -223,11 +223,12 @@ export async function parseWorkbook(file) {
   }
 
   console.log('[WA CRM][XLS] Import summary:', {
-    totalRows: rows.length,
-    importedRows: output.length,
-    headerDetected,
-    indexes
+    sheetName: bestResult.sheetName,
+    totalRows: bestResult.totalRows,
+    importedRows: bestResult.output.length,
+    headerDetected: bestResult.headerDetected,
+    indexes: bestResult.indexes
   });
 
-  return output;
+  return bestResult.output;
 }
