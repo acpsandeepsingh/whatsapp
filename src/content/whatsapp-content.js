@@ -72,6 +72,96 @@ function log(...args) {
   console.log('[WA CRM][Content]', ...args);
 }
 
+function summarizeElementForLog(node) {
+  if (!(node instanceof Element)) return 'non-element target';
+
+  const label = node.getAttribute('aria-label') || node.getAttribute('title') || '';
+  const testId = node.getAttribute('data-testid') || '';
+  const role = node.getAttribute('role') || '';
+  const className = String(node.className || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join('.');
+
+  let text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+  if (text.length > 80) text = `${text.slice(0, 77)}...`;
+
+  const parts = [
+    node.tagName?.toLowerCase() || 'unknown',
+    node.id ? `#${node.id}` : '',
+    className ? `.${className}` : '',
+    role ? `[role="${role}"]` : '',
+    label ? `[label="${label}"]` : '',
+    testId ? `[data-testid="${testId}"]` : '',
+    text ? `text="${text}"` : ''
+  ].filter(Boolean);
+
+  return parts.join('');
+}
+
+function setupWhatsAppInteractionDebugLogs() {
+  if (globalThis.__WA_CRM_CLICK_LOGGING_READY__) return;
+  globalThis.__WA_CRM_CLICK_LOGGING_READY__ = true;
+
+  document.addEventListener(
+    'click',
+    (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const clickable = target?.closest('button, [role="button"], [role="option"], [data-testid], [title], [aria-label]');
+      const summary = summarizeElementForLog(clickable || target);
+      log('[Debug][Click]', summary);
+    },
+    true
+  );
+
+  if (!globalThis.__WA_CRM_FETCH_PATCHED__ && typeof window.fetch === 'function') {
+    globalThis.__WA_CRM_FETCH_PATCHED__ = true;
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const [resource, config = {}] = args;
+      const url = typeof resource === 'string' ? resource : resource?.url || 'unknown-url';
+      const method = (config?.method || (typeof resource !== 'string' && resource?.method) || 'GET').toUpperCase();
+      const startedAt = performance.now();
+      log('[Debug][Fetch][Start]', { method, url });
+      try {
+        const response = await originalFetch(...args);
+        const durationMs = Math.round(performance.now() - startedAt);
+        log('[Debug][Fetch][Done]', { method, url, status: response.status, durationMs });
+        return response;
+      } catch (error) {
+        const durationMs = Math.round(performance.now() - startedAt);
+        log('[Debug][Fetch][Error]', { method, url, durationMs, error: error?.message || String(error) });
+        throw error;
+      }
+    };
+  }
+
+  if (!globalThis.__WA_CRM_XHR_PATCHED__ && typeof window.XMLHttpRequest === 'function') {
+    globalThis.__WA_CRM_XHR_PATCHED__ = true;
+    const originalOpen = window.XMLHttpRequest.prototype.open;
+    const originalSend = window.XMLHttpRequest.prototype.send;
+
+    window.XMLHttpRequest.prototype.open = function patchedOpen(method, url, ...rest) {
+      this.__waCrmDebugMeta = { method: String(method || 'GET').toUpperCase(), url: String(url || '') };
+      return originalOpen.call(this, method, url, ...rest);
+    };
+
+    window.XMLHttpRequest.prototype.send = function patchedSend(body) {
+      const meta = this.__waCrmDebugMeta || { method: 'GET', url: 'unknown-url' };
+      const startedAt = performance.now();
+      log('[Debug][XHR][Start]', meta);
+      this.addEventListener('loadend', () => {
+        const durationMs = Math.round(performance.now() - startedAt);
+        log('[Debug][XHR][Done]', { ...meta, status: this.status, durationMs });
+      });
+      return originalSend.call(this, body);
+    };
+  }
+
+  log('[Debug] Interaction/API logging enabled.');
+}
+
 function queryWithFallback(selectors, root = document) {
   for (const selector of selectors) {
     const el = root.querySelector(selector);
@@ -475,5 +565,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
+setupWhatsAppInteractionDebugLogs();
 
 })();
