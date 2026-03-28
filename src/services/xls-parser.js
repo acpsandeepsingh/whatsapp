@@ -172,14 +172,24 @@ function parseRows(rows = [], indexes = {}, { headerDetected = false } = {}) {
   return output;
 }
 
-function parseSheetRows(rows = [], sheetName = 'Unknown') {
+export async function parseWorkbook(file) {
+  if (!window.XLSX) {
+    throw new Error('SheetJS (XLSX) is not loaded.');
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+
+  const rows = window.XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    defval: '',
+    raw: true
+  });
+
   if (!rows.length) {
-    return {
-      output: [],
-      headerDetected: false,
-      indexes: detectColumnIndexes([]),
-      totalRows: 0
-    };
+    return [];
   }
 
   const firstRow = normalizeRowArray(rows[0]);
@@ -191,7 +201,7 @@ function parseSheetRows(rows = [], sheetName = 'Unknown') {
   }
 
   if (headerDetected) {
-    console.log('[WA CRM][XLS] Header row detected and skipped:', { sheetName, headerRow: rows[0], indexes });
+    console.log('[WA CRM][XLS] Header row detected and skipped:', rows[0], indexes);
   }
 
   let output = parseRows(rows, indexes, { headerDetected });
@@ -204,68 +214,12 @@ function parseSheetRows(rows = [], sheetName = 'Unknown') {
 
     if (fallbackOutput.length) {
       console.warn('[WA CRM][XLS] Recovered import with fallback column inference:', {
-        sheetName,
         previousIndexes: indexes,
         fallbackIndexes
       });
       indexes = fallbackIndexes;
       output = fallbackOutput;
     }
-  }
-
-  return { output, headerDetected, indexes, totalRows: rows.length };
-}
-
-export async function parseWorkbook(file) {
-  if (!window.XLSX) {
-    throw new Error('SheetJS (XLSX) is not loaded.');
-  }
-
-  const arrayBuffer = await file.arrayBuffer();
-  const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
-  const sheetNames = Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
-
-  if (!sheetNames.length) {
-    return [];
-  }
-
-  const sheetSummaries = [];
-  let bestResult = null;
-
-  sheetNames.forEach((sheetName) => {
-    const sheet = workbook.Sheets[sheetName];
-    if (!sheet) return;
-
-    const rows = window.XLSX.utils.sheet_to_json(sheet, {
-      header: 1,
-      defval: '',
-      raw: true
-    });
-
-    const result = parseSheetRows(rows, sheetName);
-    sheetSummaries.push({
-      sheetName,
-      totalRows: result.totalRows,
-      importedRows: result.output.length,
-      headerDetected: result.headerDetected,
-      indexes: result.indexes
-    });
-
-    if (!bestResult || result.output.length > bestResult.output.length) {
-      bestResult = { ...result, sheetName };
-    }
-  });
-
-  if (!bestResult) {
-    return [];
-  }
-
-  console.log('[WA CRM][XLS] Workbook sheet scan summary:', sheetSummaries);
-
-  if (!bestResult.output.length) {
-    console.warn('[WA CRM][XLS] No valid contacts detected in any sheet.', {
-      scannedSheets: sheetSummaries.map((entry) => entry.sheetName)
-    });
   }
 
   console.log('[WA CRM][XLS] Import summary:', {
