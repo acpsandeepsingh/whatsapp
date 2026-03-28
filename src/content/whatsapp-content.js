@@ -536,27 +536,6 @@ function isValidParticipantRow(row) {
   return words.length >= 1 && words.length <= 8;
 }
 
-function cleanText(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim();
-}
-
-function hasMemberLikeText(value) {
-  const text = cleanText(value).toLowerCase();
-  if (!text) return false;
-  if (/view all|member changes|group settings|media|links|docs|starred|forwarded|type a message|exit group|report group|clear chat|kept messages/.test(text)) {
-    return false;
-  }
-
-  const lines = String(value || '')
-    .split('\n')
-    .map((line) => cleanText(line))
-    .filter(Boolean);
-
-  if (lines.length > 3) return false;
-  if (text.length > 140) return false;
-  return Boolean(extractPhoneFromText(text) || /group admin/.test(text) || /^~/.test(text));
-}
-
 function isLikelyPhoneText(value) {
   const digits = normalizePhone(value);
   return digits.length >= 7;
@@ -729,20 +708,16 @@ async function scrapeGroupContacts(groupName) {
     await openGroupInfo(groupName);
   }
 
-  const participantsPanel = await waitForElement(SELECTORS.participantsContainer, 12000);
-  if (!participantsPanel) {
+  const panel = await waitForElement(SELECTORS.participantsContainer, 12000);
+  if (!panel) {
     throw new Error('Participants list not found. Open a group info panel before scraping.');
   }
-  const membersDialog = await openViewAllMembersDialog(participantsPanel);
-  const panel = membersDialog || participantsPanel;
   const discovered = new Map();
 
   let unchangedScrolls = 0;
   let previousCount = 0;
 
-  const scroller = findBestMemberScroller(panel) || panel;
-
-  for (let i = 0; i < 70; i += 1) {
+  for (let i = 0; i < 45; i += 1) {
     const rows = queryAllWithFallback(SELECTORS.participantRows, panel).filter(isValidParticipantRow);
     rows.forEach((row) => {
       const contact = readContactFromRow(row);
