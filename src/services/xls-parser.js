@@ -123,6 +123,13 @@ function isHeaderRow(row = []) {
   return /mobile|phone|whatsapp|message|template|sr/.test(joined);
 }
 
+function findLikelyHeaderRowIndex(rows = []) {
+  for (let index = 0; index < rows.length; index += 1) {
+    if (isHeaderRow(rows[index])) return index;
+  }
+  return -1;
+}
+
 function parseRows(rows = [], indexes = {}, { headerDetected = false } = {}) {
   const output = [];
 
@@ -193,24 +200,27 @@ export async function parseWorkbook(file) {
   }
 
   const firstRow = normalizeRowArray(rows[0]);
-  const headerDetected = isHeaderRow(firstRow);
+  let headerDetected = isHeaderRow(firstRow);
   let indexes = detectColumnIndexes(firstRow);
+  let parseStartIndex = 0;
 
   if (!headerDetected) {
     indexes = inferColumnIndexesFromData(rows, indexes);
+  } else {
+    parseStartIndex = 1;
   }
 
   if (headerDetected) {
     console.log('[WA CRM][XLS] Header row detected and skipped:', rows[0], indexes);
   }
 
-  let output = parseRows(rows, indexes, { headerDetected });
+  let output = parseRows(rows.slice(parseStartIndex), indexes, { headerDetected: false });
 
   // Some sheets include a title row with words like "phone" which can be misdetected
   // as a real header. If that happens and import result is empty, retry with inferred indexes.
   if (!output.length && rows.length > 1) {
     const fallbackIndexes = inferColumnIndexesFromData(rows.slice(1), indexes);
-    const fallbackOutput = parseRows(rows, fallbackIndexes, { headerDetected });
+    const fallbackOutput = parseRows(rows.slice(parseStartIndex), fallbackIndexes, { headerDetected: false });
 
     if (fallbackOutput.length) {
       console.warn('[WA CRM][XLS] Recovered import with fallback column inference:', {
@@ -222,13 +232,36 @@ export async function parseWorkbook(file) {
     }
   }
 
+  // Some files include title/info rows before the real header row.
+  // If we still couldn't parse valid contacts, scan for a later header row and retry.
+  if (!output.length && rows.length > 2) {
+    const headerRowIndex = findLikelyHeaderRowIndex(rows.slice(1));
+    if (headerRowIndex >= 0) {
+      const actualHeaderIndex = headerRowIndex + 1;
+      const actualHeader = normalizeRowArray(rows[actualHeaderIndex]);
+      const headerIndexes = detectColumnIndexes(actualHeader);
+      const bodyRows = rows.slice(actualHeaderIndex + 1);
+      const headerOutput = parseRows(bodyRows, headerIndexes, { headerDetected: false });
+
+      if (headerOutput.length) {
+        console.warn('[WA CRM][XLS] Recovered import by detecting header row later in sheet:', {
+          actualHeaderIndex,
+          headerIndexes
+        });
+        output = headerOutput;
+        indexes = headerIndexes;
+        headerDetected = true;
+      }
+    }
+  }
+
   console.log('[WA CRM][XLS] Import summary:', {
-    sheetName: bestResult.sheetName,
-    totalRows: bestResult.totalRows,
-    importedRows: bestResult.output.length,
-    headerDetected: bestResult.headerDetected,
-    indexes: bestResult.indexes
+    sheetName,
+    totalRows: rows.length,
+    importedRows: output.length,
+    headerDetected,
+    indexes
   });
 
-  return bestResult.output;
+  return output;
 }
