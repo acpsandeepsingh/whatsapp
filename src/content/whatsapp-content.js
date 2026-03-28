@@ -65,6 +65,13 @@ const SELECTORS = {
   participantRows: ['[aria-label*="Participants"] [role="listitem"]', 'div[data-testid="cell-frame-container"]', '[role="listitem"]'],
   closePanelButtons: ['button[aria-label="Back"]', 'span[data-icon="back"]', 'button[title="Back"]']
 };
+SELECTORS.filterTabs = {
+  all: ['button#all-filter', 'button[role="tab"][id="all-filter"]'],
+  unread: ['button#unread-filter', 'button[role="tab"][id="unread-filter"]'],
+  favorites: ['button#favorites-filter', 'button[role="tab"][id="favorites-filter"]'],
+  additional: ['button#additional-filters', 'button[role="tab"][id="additional-filters"]']
+};
+SELECTORS.additionalFilterMenuItems = ['[role="menuitem"]', 'div[role="option"]'];
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -299,6 +306,77 @@ async function gatherSidebarData() {
   return { chats, groups, labels, countryCodes };
 }
 
+async function clickFilterButton(filterName) {
+  const selectors = SELECTORS.filterTabs[filterName];
+  if (!selectors) return false;
+
+  const button = queryWithFallback(selectors);
+  if (!button) {
+    log(`[Filter] Button not found for "${filterName}"`);
+    return false;
+  }
+
+  (button.closest('button') || button).click();
+  await wait(350);
+  log(`[Filter] Applied "${filterName}"`);
+  return true;
+}
+
+async function selectAdditionalFilterOption(label) {
+  const opened = await clickFilterButton('additional');
+  if (!opened) return false;
+
+  const normalizedLabel = String(label || '').trim().toLowerCase();
+  const menuItems = await waitForElement(SELECTORS.additionalFilterMenuItems, 3000);
+  if (!menuItems) return false;
+
+  const allItems = queryAllWithFallback(SELECTORS.additionalFilterMenuItems).filter((item) => item.textContent?.trim());
+  const selectedItem = allItems.find((item) => {
+    const itemLabel = (item.getAttribute('aria-label') || item.textContent || '').trim().toLowerCase();
+    return itemLabel === normalizedLabel || itemLabel.includes(normalizedLabel);
+  });
+
+  if (!selectedItem) {
+    log(`[Filter] Additional filter option not found for "${label}"`);
+    return false;
+  }
+
+  (selectedItem.closest('[role="menuitem"]') || selectedItem).click();
+  await wait(500);
+  log(`[Filter] Applied additional option "${label}"`);
+  return true;
+}
+
+async function applyNativeFilter(filter = {}) {
+  const primary = filter.primary || 'all_contacts';
+  const secondary = filter.secondary || '';
+
+  if (primary === 'group') {
+    await selectAdditionalFilterOption('Groups');
+    return { primary, secondary };
+  }
+
+  if (primary === 'all_contacts' && secondary === 'unread_chats') {
+    await clickFilterButton('unread');
+    return { primary, secondary };
+  }
+
+  if (primary === 'favorites') {
+    await clickFilterButton('favorites');
+    return { primary, secondary };
+  }
+
+  await clickFilterButton('all');
+  return { primary, secondary };
+}
+
+async function gatherSidebarDataForFilter(filter = {}) {
+  await applyNativeFilter(filter);
+  const snapshot = await gatherSidebarData();
+  await clickFilterButton('all');
+  return snapshot;
+}
+
 function filterChats(snapshot = {}, filter = {}) {
   const chats = Array.isArray(snapshot.chats) ? snapshot.chats : [];
   const primary = filter.primary || 'all_contacts';
@@ -524,17 +602,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ success: true });
         break;
       case ACTIONS.GET_CHAT_SNAPSHOT: {
-        const snapshot = await gatherSidebarData();
+        const snapshot = await gatherSidebarDataForFilter({ primary: 'all_contacts', secondary: 'all_chats' });
         sendResponse({ success: true, ...snapshot });
         break;
       }
       case ACTIONS.GET_GROUPS: {
-        const snapshot = await gatherSidebarData();
+        const snapshot = await gatherSidebarDataForFilter({ primary: 'group', secondary: '' });
         sendResponse({ success: true, groups: snapshot.groups });
         break;
       }
       case ACTIONS.FETCH_CONTACTS: {
-        const snapshot = await gatherSidebarData();
+        const snapshot = await gatherSidebarDataForFilter(message.filter || {});
         const contacts = filterChats(snapshot, message.filter || {});
         sendResponse({ success: true, data: contacts, snapshot });
         break;
