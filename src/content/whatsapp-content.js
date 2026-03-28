@@ -288,14 +288,22 @@ function detectChatTypeFromRow(row) {
 }
 
 async function collectSidebarRows(paneSide) {
+  const scrollContainer =
+    [paneSide, ...paneSide.querySelectorAll('div')]
+      .filter((node) => node && node.scrollHeight > node.clientHeight + 20)
+      .sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || paneSide;
+
   const discovered = new Map();
-  let unchanged = 0;
+  let unchangedIterations = 0;
   let previousSize = 0;
+  const step = Math.max(220, Math.floor(scrollContainer.clientHeight * 0.9));
+  const maxIterations = 220;
+  const stableLimit = 16;
 
-  paneSide.scrollTop = 0;
-  await wait(250);
+  scrollContainer.scrollTop = 0;
+  await wait(300);
 
-  for (let i = 0; i < 60; i += 1) {
+  for (let i = 0; i < maxIterations; i += 1) {
     const visibleRows = queryAllWithFallback(SELECTORS.sidebarChatRows, paneSide).filter((row) => row.textContent?.trim());
 
     visibleRows.forEach((row) => {
@@ -304,21 +312,28 @@ async function collectSidebarRows(paneSide) {
       if (!discovered.has(key)) discovered.set(key, chat);
     });
 
-    paneSide.scrollTop = paneSide.scrollHeight;
-    await wait(220);
+    const nextScrollTop = Math.min(scrollContainer.scrollTop + step, Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight));
+    const reachedBottom = nextScrollTop <= scrollContainer.scrollTop + 1;
+
+    if (!reachedBottom) {
+      scrollContainer.scrollTop = nextScrollTop;
+      await wait(260);
+    } else {
+      await wait(360);
+    }
 
     if (discovered.size === previousSize) {
-      unchanged += 1;
-      if (unchanged >= 6) break;
+      unchangedIterations += 1;
+      if (reachedBottom && unchangedIterations >= stableLimit) break;
     } else {
-      unchanged = 0;
+      unchangedIterations = 0;
     }
 
     previousSize = discovered.size;
   }
 
-  paneSide.scrollTop = 0;
-  await wait(120);
+  scrollContainer.scrollTop = 0;
+  await wait(140);
 
   return [...discovered.values()];
 }
@@ -397,11 +412,10 @@ async function applyNativeFilter(filter = {}) {
   return { primary, secondary };
 }
 
-async function gatherSidebarDataForFilter(filter = {}) {
-  await applyNativeFilter(filter);
-  const snapshot = await gatherSidebarData();
-  await clickFilterButton('all');
-  return snapshot;
+async function gatherSidebarDataForFilter(_filter = {}) {
+  // Native WhatsApp tab clicking (All/Unread/Favorites/etc) is intentionally disabled.
+  // We always capture the full sidebar list once, then apply requested filters in JS.
+  return gatherSidebarData();
 }
 
 function filterChats(snapshot = {}, filter = {}) {
