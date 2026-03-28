@@ -198,6 +198,24 @@ function extractPhoneFromText(value) {
   return phoneMatch ? normalizePhone(phoneMatch[0]) : '';
 }
 
+function cleanText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function hasMemberLikeText(value) {
+  const text = cleanText(value);
+  if (!text) return false;
+  if (extractPhoneFromText(text)) return true;
+
+  const words = text
+    .split(' ')
+    .map((word) => word.trim())
+    .filter(Boolean);
+
+  if (!words.length || words.length > 10) return false;
+  return words.some((word) => /[a-z]/i.test(word));
+}
+
 function extractCountryCode(phone) {
   const digits = normalizePhone(phone);
   if (!digits) return '';
@@ -667,6 +685,20 @@ function getSearchMembersPopup() {
     .find((dialog) => dialog.querySelector('input[aria-label="Search contacts"], input[placeholder="Search contacts"]')) || null;
 }
 
+function getWaPopoverBucketDialog() {
+  const popoverBucket = document.querySelector('#wa-popovers-bucket');
+  if (!popoverBucket) return null;
+
+  const dialogs = [...popoverBucket.querySelectorAll('[data-animate-modal-popup="true"], [role="dialog"]')];
+  return (
+    dialogs.find((dialog) => {
+      const hasMemberRows = Boolean(dialog.querySelector('[role="listitem"]'));
+      const hasSearchInput = Boolean(dialog.querySelector('input[aria-label="Search contacts"], input[placeholder="Search contacts"]'));
+      return hasMemberRows || hasSearchInput;
+    }) || null
+  );
+}
+
 async function openViewAllMembersDialog(root = document) {
   const existing = getSearchMembersPopup();
   if (existing) return existing;
@@ -679,6 +711,16 @@ async function openViewAllMembersDialog(root = document) {
   await wait(700);
 
   return getSearchMembersPopup();
+}
+
+async function ensureMembersPopupOpen(root = document) {
+  const existing = getWaPopoverBucketDialog() || getSearchMembersPopup();
+  if (existing) return existing;
+
+  const reopened = await openViewAllMembersDialog(root);
+  if (reopened) return reopened;
+
+  return getWaPopoverBucketDialog() || getSearchMembersPopup() || null;
 }
 
 function findBestMemberScroller(root) {
@@ -723,17 +765,12 @@ async function scrapeGroupContacts(groupName) {
     await openGroupInfo(groupName);
   }
 
-  let panel = await waitForElement(SELECTORS.participantsContainer, 12000);
-  if (!panel) {
-    throw new Error('Participants list not found. Open a group info panel before scraping.');
+  const popupDialog = await ensureMembersPopupOpen(document);
+  if (!popupDialog) {
+    throw new Error('Popup not found under #wa-popovers-bucket. Open "View all" members popup first.');
   }
 
-  const popupDialog = await openViewAllMembersDialog(document);
-  const popupInput = popupDialog ? queryWithFallback(SELECTORS.searchContactsInput, popupDialog) : null;
-  const usingPopup = Boolean(popupDialog && popupInput);
-  if (usingPopup) {
-    panel = popupDialog;
-  }
+  let panel = popupDialog;
 
   const discovered = new Map();
 
@@ -741,15 +778,18 @@ async function scrapeGroupContacts(groupName) {
   let previousCount = 0;
   let keepCurrentContextMisses = 0;
 
-  for (let i = 0; i < 45; i += 1) {
-    const activePopup = usingPopup ? getSearchMembersPopup() : null;
+  for (let i = 0; i < 120; i += 1) {
+    const activePopup = (await ensureMembersPopupOpen(document)) || getWaPopoverBucketDialog() || getSearchMembersPopup();
     const activePanel = activePopup || panel;
     if (!activePanel) {
       keepCurrentContextMisses += 1;
-      if (keepCurrentContextMisses >= 6) break;
+      if (keepCurrentContextMisses >= 12) break;
       await wait(350);
       continue;
     }
+
+    panel = activePanel;
+    keepCurrentContextMisses = 0;
 
     const scroller = findBestMemberScroller(activePanel) || activePanel;
     const rows = queryAllWithFallback(SELECTORS.participantRows, activePanel).filter(isValidParticipantRow);
@@ -764,7 +804,7 @@ async function scrapeGroupContacts(groupName) {
     const previousTop = scroller.scrollTop;
     scroller.scrollTop = Math.min(scroller.scrollTop + Math.max(420, Math.floor(scroller.clientHeight * 0.85)), scroller.scrollHeight);
     const stuckAtBottom = Math.abs(scroller.scrollTop - previousTop) < 4;
-    await wait(usingPopup ? 800 : 450);
+    await wait(800);
 
     if (discovered.size === previousCount) {
       unchangedScrolls += 1;
@@ -779,7 +819,7 @@ async function scrapeGroupContacts(groupName) {
 
   const unresolvedContacts = [...discovered.entries()].filter(([, contact]) => !contact.phone);
   for (const [key, contact] of unresolvedContacts) {
-    const currentPanel = (usingPopup && getSearchMembersPopup()) || panel;
+    const currentPanel = (await ensureMembersPopupOpen(document)) || getWaPopoverBucketDialog() || getSearchMembersPopup() || panel;
     const rows = queryAllWithFallback(SELECTORS.participantRows, currentPanel)
       .filter(isValidParticipantRow)
       .filter((row) => (row.textContent || '').includes(contact.name));
