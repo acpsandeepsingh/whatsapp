@@ -54,6 +54,70 @@ function detectColumnIndexes(headerRow = []) {
   return { srNoIndex, mobileIndex, nameIndex, messageIndex, attachmentIndex, normalized };
 }
 
+function inferColumnIndexesFromData(rows = [], baseIndexes = {}) {
+  const sampleRows = rows
+    .map(normalizeRowArray)
+    .filter((row) => row.some((cell) => normalizeCell(cell) !== ''))
+    .slice(0, 50);
+
+  if (!sampleRows.length) {
+    return baseIndexes;
+  }
+
+  const stats = new Map();
+  const ensureStats = (columnIndex) => {
+    if (!stats.has(columnIndex)) {
+      stats.set(columnIndex, { validPhones: 0, numericValues: 0, nonEmptyValues: 0 });
+    }
+    return stats.get(columnIndex);
+  };
+
+  sampleRows.forEach((row) => {
+    row.forEach((cell, columnIndex) => {
+      const normalized = normalizeCell(cell);
+      if (!normalized) return;
+
+      const columnStats = ensureStats(columnIndex);
+      columnStats.nonEmptyValues += 1;
+
+      const digitLength = toDigits(normalized).length;
+      if (/^\d+$/.test(normalized) || digitLength >= 8) {
+        columnStats.numericValues += 1;
+      }
+
+      if (isValidPhone(normalized)) {
+        columnStats.validPhones += 1;
+      }
+    });
+  });
+
+  const candidates = [...stats.entries()]
+    .map(([columnIndex, columnStats]) => ({ columnIndex, ...columnStats }))
+    .filter((column) => column.validPhones > 0)
+    .sort((a, b) => {
+      if (b.validPhones !== a.validPhones) return b.validPhones - a.validPhones;
+      if (b.numericValues !== a.numericValues) return b.numericValues - a.numericValues;
+      return a.columnIndex - b.columnIndex;
+    });
+
+  if (!candidates.length) {
+    return baseIndexes;
+  }
+
+  const mobileIndex = candidates[0].columnIndex;
+  const srNoIndex = mobileIndex > 0 ? mobileIndex - 1 : baseIndexes.srNoIndex ?? 0;
+  const messageIndex = mobileIndex + 1;
+  const attachmentIndex = mobileIndex + 2;
+
+  return {
+    ...baseIndexes,
+    srNoIndex,
+    mobileIndex,
+    messageIndex,
+    attachmentIndex
+  };
+}
+
 function isHeaderRow(row = []) {
   const joined = normalizeRowArray(row).map(normalizeHeader).filter(Boolean).join('|');
   return /mobile|phone|whatsapp|message|template|sr/.test(joined);
@@ -81,7 +145,11 @@ export async function parseWorkbook(file) {
 
   const firstRow = normalizeRowArray(rows[0]);
   const headerDetected = isHeaderRow(firstRow);
-  const indexes = detectColumnIndexes(firstRow);
+  let indexes = detectColumnIndexes(firstRow);
+
+  if (!headerDetected) {
+    indexes = inferColumnIndexesFromData(rows, indexes);
+  }
 
   if (headerDetected) {
     console.log('[WA CRM][XLS] Header row detected and skipped:', rows[0], indexes);
