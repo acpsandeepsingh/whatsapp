@@ -56,6 +56,9 @@ const SELECTORS = {
   fileInput: ['input[type="file"]', 'input[accept*="image"], input[accept*="video"], input[accept*="*/*"]'],
   chatHeaderClickable: ['header [title]', 'header h1', 'header [data-testid="conversation-info-header"]'],
   groupInfoHeading: ['[aria-label*="Group info"]', '[title="Group info"]', 'div[data-testid="drawer-header"]'],
+  groupInfoPanel: ['[aria-label*="Group info"]', '[data-testid="drawer-left"]', '[data-testid="chat-drawer"]'],
+  searchMembersPopup: ['[data-animate-modal-popup="true"][aria-label*="Search members"]', '[role="dialog"][aria-label*="Search members"]'],
+  searchContactsInput: ['input[aria-label="Search contacts"]', 'input[placeholder="Search contacts"]'],
   participantsContainer: [
     '[aria-label*="Participants"] [tabindex="-1"]',
     '[aria-label*="Participants"]',
@@ -633,23 +636,41 @@ async function enrichDirectChatsWithProfilePhones(chats = [], filter = {}) {
 }
 
 async function openGroupInfo(groupName) {
-  await openChatBySearch(groupName);
+  const alreadyInGroupInfo = Boolean(
+    queryWithFallback(SELECTORS.groupInfoHeading) || queryWithFallback(SELECTORS.groupInfoPanel)
+  );
 
-  const header = await waitForElement(SELECTORS.chatHeaderClickable, 8000);
-  if (!header) {
-    throw new Error('Chat header not found while opening group info.');
-  }
+  if (!alreadyInGroupInfo) {
+    await openChatBySearch(groupName);
 
-  (header.closest('button') || header).click();
-  const panel = await waitForElement(SELECTORS.groupInfoHeading, 8000);
-  if (!panel) {
-    throw new Error('Group info panel did not open.');
+    const header = await waitForElement(SELECTORS.chatHeaderClickable, 8000);
+    if (!header) {
+      throw new Error('Chat header not found while opening group info.');
+    }
+
+    (header.closest('button') || header).click();
+    const panel = await waitForElement(SELECTORS.groupInfoHeading, 8000);
+    if (!panel) {
+      throw new Error('Group info panel did not open.');
+    }
   }
 
   await wait(500);
 }
 
+function getSearchMembersPopup() {
+  const fromSelectors = queryWithFallback(SELECTORS.searchMembersPopup);
+  if (fromSelectors) return fromSelectors;
+
+  const popoverBucket = document.querySelector('#wa-popovers-bucket') || document.body;
+  return [...popoverBucket.querySelectorAll('[data-animate-modal-popup="true"], [role="dialog"]')]
+    .find((dialog) => dialog.querySelector('input[aria-label="Search contacts"], input[placeholder="Search contacts"]')) || null;
+}
+
 async function openViewAllMembersDialog(root = document) {
+  const existing = getSearchMembersPopup();
+  if (existing) return existing;
+
   const candidateButtons = [...root.querySelectorAll('[role="button"], button, [tabindex="0"]')];
   const viewAll = candidateButtons.find((node) => /view all\s*\(\d+\s*more\)|view all|see all/i.test(cleanText(node.textContent)));
   if (!viewAll) return null;
@@ -657,13 +678,7 @@ async function openViewAllMembersDialog(root = document) {
   (viewAll.closest('[role="button"],button') || viewAll).click();
   await wait(700);
 
-  const dialogs = [...document.querySelectorAll('[role="dialog"]')];
-  return (
-    dialogs.reverse().find((dialog) => {
-      const text = cleanText(dialog.innerText || '');
-      return /members?|add member|view all/i.test(text);
-    }) || null
-  );
+  return getSearchMembersPopup();
 }
 
 function findBestMemberScroller(root) {
@@ -708,42 +723,55 @@ async function scrapeGroupContacts(groupName) {
     await openGroupInfo(groupName);
   }
 
-  const panel = await waitForElement(SELECTORS.participantsContainer, 12000);
+  let panel = await waitForElement(SELECTORS.participantsContainer, 12000);
   if (!panel) {
     throw new Error('Participants list not found. Open a group info panel before scraping.');
   }
+
+  const popupDialog = await openViewAllMembersDialog(document);
+  const popupInput = popupDialog ? queryWithFallback(SELECTORS.searchContactsInput, popupDialog) : null;
+  const usingPopup = Boolean(popupDialog && popupInput);
+  if (usingPopup) {
+    panel = popupDialog;
+  }
+
   const discovered = new Map();
 
   let unchangedScrolls = 0;
   let previousCount = 0;
-  let direction = 1;
-
-  const scroller = findBestMemberScroller(panel) || panel;
+  let keepCurrentContextMisses = 0;
 
   for (let i = 0; i < 45; i += 1) {
-    const rows = queryAllWithFallback(SELECTORS.participantRows, panel).filter(isValidParticipantRow);
+    const activePopup = usingPopup ? getSearchMembersPopup() : null;
+    const activePanel = activePopup || panel;
+    if (!activePanel) {
+      keepCurrentContextMisses += 1;
+      if (keepCurrentContextMisses >= 6) break;
+      await wait(350);
+      continue;
+    }
+
+    const scroller = findBestMemberScroller(activePanel) || activePanel;
+    const rows = queryAllWithFallback(SELECTORS.participantRows, activePanel).filter(isValidParticipantRow);
     rows.forEach((row) => {
       const contact = readContactFromRow(row);
       if (!contact.name || contact.name === 'Unknown') return;
       const key = `${contact.name}|${contact.phone || ''}`;
       if (!discovered.has(key)) discovered.set(key, { ...contact });
     });
-    collectVisibleMembersFromPanel(panel, discovered);
+    collectVisibleMembersFromPanel(activePanel, discovered);
 
-    scroller.scrollTop = scroller.scrollHeight;
-    await wait(membersDialog ? 900 : 400);
+    const previousTop = scroller.scrollTop;
+    scroller.scrollTop = Math.min(scroller.scrollTop + Math.max(420, Math.floor(scroller.clientHeight * 0.85)), scroller.scrollHeight);
+    const stuckAtBottom = Math.abs(scroller.scrollTop - previousTop) < 4;
+    await wait(usingPopup ? 800 : 450);
 
     if (discovered.size === previousCount) {
       unchangedScrolls += 1;
-      if (unchangedScrolls >= 12) break;
+      if (unchangedScrolls >= 12 && stuckAtBottom) break;
     } else {
       unchangedScrolls = 0;
-    }
-
-    if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8) {
-      direction = -1;
-    } else if (scroller.scrollTop <= 8) {
-      direction = 1;
+      keepCurrentContextMisses = 0;
     }
 
     previousCount = discovered.size;
@@ -751,7 +779,8 @@ async function scrapeGroupContacts(groupName) {
 
   const unresolvedContacts = [...discovered.entries()].filter(([, contact]) => !contact.phone);
   for (const [key, contact] of unresolvedContacts) {
-    const rows = queryAllWithFallback(SELECTORS.participantRows, panel)
+    const currentPanel = (usingPopup && getSearchMembersPopup()) || panel;
+    const rows = queryAllWithFallback(SELECTORS.participantRows, currentPanel)
       .filter(isValidParticipantRow)
       .filter((row) => (row.textContent || '').includes(contact.name));
     const matchedRow = rows[0];
