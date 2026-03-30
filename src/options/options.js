@@ -311,6 +311,9 @@ function refreshSecondaryFilter() {
         option.textContent = CHAT_SCOPE_OPTIONS[index - 1].label;
       }
     });
+    if ([...ui.secondaryFilter.options].some((option) => option.value === 'all_chats')) {
+      ui.secondaryFilter.value = 'all_chats';
+    }
     return;
   }
 
