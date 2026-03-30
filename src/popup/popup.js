@@ -96,10 +96,12 @@ function downloadContactFormatWithName() {
   }
 
   const headers = ['Sr No', 'Mobile Number', 'Name', 'Message Template', 'Attachment URL'];
-  const selectedGroupName = ui.primaryFilter.value === 'group' ? (ui.secondaryFilter.value || '') : '';
+  const selectedOptionLabel =
+    ui.primaryFilter.value === 'group' ? (ui.secondaryFilter.selectedOptions?.[0]?.textContent || '').trim() : '';
+  const selectedGroupName = selectedOptionLabel || (ui.primaryFilter.value === 'group' ? (ui.secondaryFilter.value || '') : '');
   const rows = latestFetchedContacts.map((contact, index) => {
     const normalizedPhone = String(contact.phone || '').replace(/\s+/g, '');
-    const normalizedName = String(contact.name || '').replace(/\s+/g, ' ').trim();
+    const normalizedName = String(contact.name || contact.contactName || '').replace(/\s+/g, ' ').trim();
 
     return [
       index + 1,

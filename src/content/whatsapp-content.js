@@ -34,6 +34,8 @@ const GROUP_METADATA_DB = Object.freeze({
   name: 'model-storage',
   store: 'group-metadata'
 });
+const PARTICIPANT_DB_STORE = 'participant';
+const CONTACT_DB_STORE = 'contact';
 
 function getAction(message = {}) {
   return message.action || message.type || '';
@@ -367,6 +369,15 @@ function normalizeGroupMetadataRow(row = {}, index = 0) {
   return { id, subject };
 }
 
+function cleanPhoneFromContact(value) {
+  if (!value) return '';
+  return String(value).replace(/@c\.us$/, '').trim();
+}
+
+function pickContactName(contact = {}) {
+  return cleanText(contact.name || contact.pushname || contact.formattedName || contact.shortName || 'Unknown');
+}
+
 async function loadGroupMetadataFromIndexedDb() {
   const openDb = () =>
     new Promise((resolve, reject) => {
@@ -391,6 +402,80 @@ async function loadGroupMetadataFromIndexedDb() {
     return rows.map((row, index) => normalizeGroupMetadataRow(row, index)).filter(Boolean);
   } catch (error) {
     log('[GroupMetadata] IndexedDB read failed:', error?.message || error);
+    return [];
+  } finally {
+    try {
+      db?.close?.();
+    } catch (_error) {
+      // no-op
+    }
+  }
+}
+
+async function loadGroupContactsByIdFromIndexedDb(groupId) {
+  const normalizedGroupId = cleanText(groupId);
+  if (!normalizedGroupId) return [];
+
+  const openDb = () =>
+    new Promise((resolve, reject) => {
+      const req = indexedDB.open(GROUP_METADATA_DB.name);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('Unable to open IndexedDB'));
+    });
+
+  const getByKey = (store, key) =>
+    new Promise((resolve, reject) => {
+      const req = store.get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error || new Error('Unable to read IndexedDB item'));
+    });
+
+  const getAll = (store) =>
+    new Promise((resolve, reject) => {
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error || new Error('Unable to read IndexedDB items'));
+    });
+
+  let db;
+  try {
+    db = await openDb();
+    const storeNames = db.objectStoreNames;
+    const hasStores =
+      storeNames.contains(GROUP_METADATA_DB.store) &&
+      storeNames.contains(PARTICIPANT_DB_STORE) &&
+      storeNames.contains(CONTACT_DB_STORE);
+    if (!hasStores) return [];
+
+    const tx = db.transaction([GROUP_METADATA_DB.store, PARTICIPANT_DB_STORE, CONTACT_DB_STORE], 'readonly');
+    const groupStore = tx.objectStore(GROUP_METADATA_DB.store);
+    const participantStore = tx.objectStore(PARTICIPANT_DB_STORE);
+    const contactStore = tx.objectStore(CONTACT_DB_STORE);
+
+    const group = await getByKey(groupStore, normalizedGroupId);
+    if (!group) return [];
+
+    const participantRows = await getAll(participantStore);
+    const participantRecord = participantRows.find(
+      (row) => cleanText(row.groupId) === normalizedGroupId || cleanText(row.id) === normalizedGroupId
+    );
+    if (!participantRecord || !Array.isArray(participantRecord.participants)) return [];
+
+    const contacts = [];
+    for (const lid of participantRecord.participants) {
+      const contact = await getByKey(contactStore, lid);
+      contacts.push({
+        groupId: group.id || normalizedGroupId,
+        groupName: cleanText(group.subject || group.name || group.title || ''),
+        id: lid,
+        name: pickContactName(contact || {}),
+        phone: cleanPhoneFromContact(contact?.phoneNumber)
+      });
+    }
+
+    return contacts.filter((contact) => contact.phone || contact.name);
+  } catch (error) {
+    log('[GroupContacts] IndexedDB group participant read failed:', error?.message || error);
     return [];
   } finally {
     try {
@@ -1005,6 +1090,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         contactFetchRuntime.stopRequested = false;
         const requestedFilter = { ...(message.filter || {}) };
         if (requestedFilter.primary === 'group' && requestedFilter.secondary) {
+          const groupContacts = await loadGroupContactsByIdFromIndexedDb(requestedFilter.secondary);
+          if (groupContacts.length) {
+            sendResponse({
+              success: true,
+              data: groupContacts,
+              snapshot: { chats: [], groups: [], labels: [], countryCodes: [] },
+              source: 'indexeddb-group-participants',
+              stopped: contactFetchRuntime.stopRequested
+            });
+            break;
+          }
+
           requestedFilter.secondary = await resolveGroupFilterValue(requestedFilter.secondary);
         }
         const snapshot = await gatherSidebarDataForFilter(requestedFilter);
