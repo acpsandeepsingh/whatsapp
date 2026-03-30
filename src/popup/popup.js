@@ -102,7 +102,8 @@ function normalizeIndexedDbContact(contact = {}, index = 0) {
     srNo: index + 1,
     mobile: String(rawId).split('@')[0] || '',
     savedName: String(contact.name || contact.shortName || '').trim(),
-    publicName: String(contact.pushname || '').trim()
+    publicName: String(contact.pushname || '').trim(),
+    groups: ''
   };
 }
 
@@ -174,8 +175,8 @@ async function downloadContactFormatWithName() {
 function downloadIndexedDbContactsXls(rows) {
   if (!rows.length) return;
 
-  const headers = ['Sr No', 'Mobile No', 'Saved Name', 'Public Name'];
-  const tableRows = [headers, ...rows.map((row) => [row.srNo, row.mobile, row.savedName, row.publicName])];
+  const headers = ['Sr No', 'Mobile No', 'Saved Name', 'Public Name', 'Groups'];
+  const tableRows = [headers, ...rows.map((row) => [row.srNo, row.mobile, row.savedName, row.publicName, row.groups || ''])];
   const html = `
     <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
       <head><meta charset="UTF-8"></head>
@@ -206,23 +207,70 @@ async function fetchAllContactsFromIndexedDb(tabId) {
         request.onerror = () => resolve([]);
         request.onsuccess = () => {
           const db = request.result;
-          try {
-            const tx = db.transaction('contact', 'readonly');
-            const store = tx.objectStore('contact');
-            const query = store.getAll();
-            query.onerror = () => resolve([]);
-            query.onsuccess = () => resolve(Array.isArray(query.result) ? query.result : []);
-          } catch (error) {
-            resolve([]);
-          }
+          const read = (name) =>
+            new Promise((ok) => {
+              if (!db.objectStoreNames.contains(name)) return ok([]);
+              try {
+                const tx = db.transaction(name, 'readonly');
+                const store = tx.objectStore(name);
+                const query = store.getAll();
+                query.onerror = () => ok([]);
+                query.onsuccess = () => ok(Array.isArray(query.result) ? query.result : []);
+              } catch (error) {
+                ok([]);
+              }
+            });
+
+          Promise.all([read('contact'), read('chat'), read('group-metadata'), read('group')])
+            .then(([contacts, chats, groupMeta, groups]) => {
+              const allGroups = [...chats, ...groupMeta, ...groups];
+              const getId = (obj = {}) => {
+                for (const value of Object.values(obj)) {
+                  if (typeof value === 'string' && value.endsWith('@c.us')) return value;
+                }
+                for (const value of Object.values(obj)) {
+                  if (typeof value === 'string' && value.includes('@')) return value;
+                }
+                return '';
+              };
+              const getGroupName = (obj = {}) => obj.name || obj.subject || obj.formattedTitle || obj.displayName || '';
+              const hasMember = (obj = {}, id = '') => Boolean(id) && JSON.stringify(obj).includes(id);
+
+              const rows = (Array.isArray(contacts) ? contacts : [])
+                .map((contact, index) => {
+                  const normalized = {
+                    srNo: index + 1,
+                    mobile: '',
+                    savedName: '',
+                    publicName: '',
+                    groups: ''
+                  };
+                  const id = getId(contact);
+                  const groupNames = allGroups
+                    .map((group) => ({ name: getGroupName(group), hasContact: hasMember(group, id) }))
+                    .filter((entry) => entry.name && entry.hasContact)
+                    .map((entry) => entry.name);
+
+                  normalized.mobile = String(id).split('@')[0] || '';
+                  normalized.savedName = String(contact?.name || contact?.shortName || '').trim();
+                  normalized.publicName = String(contact?.pushname || '').trim();
+                  normalized.groups = [...new Set(groupNames)].join(' | ');
+                  return normalized;
+                })
+                .filter((contact) => contact.mobile || contact.savedName || contact.publicName);
+
+              resolve(rows);
+            })
+            .catch(() => resolve([]));
         };
       })
   });
 
   const contacts = Array.isArray(result?.result) ? result.result : [];
-  return contacts
-    .map((contact, index) => normalizeIndexedDbContact(contact, index))
-    .filter((contact) => contact.mobile || contact.savedName || contact.publicName);
+  return contacts.map((contact, index) => ({
+    ...normalizeIndexedDbContact(contact, index),
+    ...contact
+  }));
 }
 
 function buildSecondaryOptions(values, placeholder = 'Select value') {
