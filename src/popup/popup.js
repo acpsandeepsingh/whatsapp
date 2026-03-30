@@ -59,6 +59,9 @@ async function restorePopupState() {
     [];
 
   latestFetchedContacts = restoredContacts;
+  if (!latestFetchedContacts.length) {
+    latestFetchedContacts = await loadContactsFromLocalDb();
+  }
   ui.downloadContactsBtn.classList.toggle('hidden', !latestFetchedContacts.length);
 
   if (popupState.statusText) {
@@ -89,7 +92,29 @@ function excelTextValue(value) {
   return `="${escaped}"`;
 }
 
-function downloadContactFormatWithName() {
+
+async function loadContactsFromLocalDb() {
+  const stored = await chrome.storage.local.get(['lastContactsFetchResult', 'dashboardRows']);
+
+  const fetchedContacts = Array.isArray(stored?.lastContactsFetchResult?.data)
+    ? stored.lastContactsFetchResult.data
+    : [];
+  if (fetchedContacts.length) return fetchedContacts;
+
+  const dashboardRows = Array.isArray(stored?.dashboardRows) ? stored.dashboardRows : [];
+  return dashboardRows
+    .map((row) => ({
+      phone: String(row?.mobileNumber || '').trim(),
+      name: String(row?.name || '').trim()
+    }))
+    .filter((row) => row.phone || row.name);
+}
+
+async function downloadContactFormatWithName() {
+  if (!latestFetchedContacts.length) {
+    latestFetchedContacts = await loadContactsFromLocalDb();
+  }
+
   if (!latestFetchedContacts.length) {
     setStatus('No synchronized contacts available to download.', true);
     return;
