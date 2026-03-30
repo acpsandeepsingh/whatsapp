@@ -135,19 +135,21 @@ async function downloadContactFormatWithName() {
     return;
   }
 
-  const headers = ['Sr No', 'Mobile Number', 'Name', 'Message Template', 'Attachment URL'];
+  const headers = ['Sr No', 'Mobile Number', 'Name', 'Group Name', 'Message Template', 'Attachment URL'];
   const selectedOptionLabel =
     ui.primaryFilter.value === 'group' ? (ui.secondaryFilter.selectedOptions?.[0]?.textContent || '').trim() : '';
   const selectedGroupName = selectedOptionLabel || (ui.primaryFilter.value === 'group' ? (ui.secondaryFilter.value || '') : '');
   const rows = latestFetchedContacts.map((contact, index) => {
     const normalizedPhone = String(contact.phone || '').replace(/\s+/g, '');
     const normalizedName = String(contact.name || contact.contactName || '').replace(/\s+/g, ' ').trim();
+    const normalizedGroupName = String(contact.groupName || selectedGroupName || '').replace(/\s+/g, ' ').trim();
 
     return [
       index + 1,
       excelTextValue(normalizedPhone),
       excelTextValue(normalizedName),
-      selectedGroupName || 'Hello {{name}}',
+      excelTextValue(normalizedGroupName),
+      '',
       ''
     ];
   });
