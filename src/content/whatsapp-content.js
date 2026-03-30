@@ -1057,7 +1057,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const action = getAction(message);
     log('ACTION:', action, message);
 
-    if (action !== ACTIONS.PING) {
+    const isLocalOnlyGroupAction =
+      action === ACTIONS.GET_GROUPS ||
+      (action === ACTIONS.FETCH_CONTACTS && String(message?.filter?.primary || '') === 'group');
+
+    if (action !== ACTIONS.PING && !isLocalOnlyGroupAction) {
       await ensureWhatsAppReady();
     }
 
@@ -1076,14 +1080,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       case ACTIONS.GET_GROUPS: {
         const metadataGroups = await loadGroupMetadataFromIndexedDb();
-        if (metadataGroups.length) {
-          sendResponse({ success: true, groups: metadataGroups });
-          break;
-        }
-
-        const snapshot = await gatherSidebarDataForFilter({ primary: 'group', secondary: '' });
-        const groups = (snapshot.groups || []).map((subject, index) => ({ id: `sidebar-${index}`, subject }));
-        sendResponse({ success: true, groups });
+        sendResponse({
+          success: true,
+          groups: metadataGroups,
+          source: 'indexeddb-group-metadata'
+        });
         break;
       }
       case ACTIONS.FETCH_CONTACTS: {
@@ -1091,18 +1092,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const requestedFilter = { ...(message.filter || {}) };
         if (requestedFilter.primary === 'group' && requestedFilter.secondary) {
           const groupContacts = await loadGroupContactsByIdFromIndexedDb(requestedFilter.secondary);
-          if (groupContacts.length) {
-            sendResponse({
-              success: true,
-              data: groupContacts,
-              snapshot: { chats: [], groups: [], labels: [], countryCodes: [] },
-              source: 'indexeddb-group-participants',
-              stopped: contactFetchRuntime.stopRequested
-            });
-            break;
-          }
-
-          requestedFilter.secondary = await resolveGroupFilterValue(requestedFilter.secondary);
+          sendResponse({
+            success: true,
+            data: groupContacts,
+            snapshot: { chats: [], groups: [], labels: [], countryCodes: [] },
+            source: 'indexeddb-group-participants',
+            stopped: contactFetchRuntime.stopRequested
+          });
+          break;
         }
         const snapshot = await gatherSidebarDataForFilter(requestedFilter);
         const enrichedChats = await enrichDirectChatsWithProfilePhones(snapshot.chats || [], requestedFilter);
