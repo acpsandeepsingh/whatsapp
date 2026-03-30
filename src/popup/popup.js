@@ -279,12 +279,19 @@ async function fetchContacts() {
   }
 
   const selectedPrimary = ui.primaryFilter.value;
-  if (selectedPrimary !== 'popup_contacts') {
+  if (selectedPrimary !== 'popup_contacts' && selectedPrimary !== 'group') {
     if (!(await fetchSnapshot())) {
       ui.fetchContactsBtn.disabled = false;
       await persistPopupState();
       return;
     }
+  }
+
+  if (selectedPrimary === 'group' && !ui.secondaryFilter.value) {
+    ui.fetchContactsBtn.disabled = false;
+    setStatus('Choose a group from the second filter list first.', true);
+    await persistPopupState();
+    return;
   }
 
   const payload =
@@ -402,7 +409,12 @@ ui.downloadContactsBtn?.addEventListener('click', downloadContactFormatWithName)
 ui.closePopupBtn?.addEventListener('click', stopFetchAndClosePopup);
 
 ui.primaryFilter.addEventListener('change', async () => {
-  if (ui.primaryFilter.value !== 'popup_contacts' && !chatSnapshot.groups.length && !chatSnapshot.countryCodes.length) {
+  if (
+    ui.primaryFilter.value !== 'popup_contacts' &&
+    ui.primaryFilter.value !== 'group' &&
+    !chatSnapshot.groups.length &&
+    !chatSnapshot.countryCodes.length
+  ) {
     await fetchSnapshot();
   }
 
@@ -441,4 +453,7 @@ chrome.runtime.onMessage.addListener((message) => {
   refreshSecondaryFilter();
   await restorePopupState();
   await restoreRunningOrPreviousState();
+  if (ui.primaryFilter.value === 'group') {
+    await fetchGroupsForSecondaryFilter();
+  }
 })();
