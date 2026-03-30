@@ -92,6 +92,20 @@ function excelTextValue(value) {
   return `="${escaped}"`;
 }
 
+function normalizeIndexedDbContact(contact = {}, index = 0) {
+  const rawId =
+    Object.values(contact).find((value) => typeof value === 'string' && value.endsWith('@c.us')) ||
+    Object.values(contact).find((value) => typeof value === 'string' && value.includes('@')) ||
+    '';
+
+  return {
+    srNo: index + 1,
+    mobile: String(rawId).split('@')[0] || '',
+    savedName: String(contact.name || contact.shortName || '').trim(),
+    publicName: String(contact.pushname || '').trim()
+  };
+}
+
 
 async function loadContactsFromLocalDb() {
   const stored = await chrome.storage.local.get(['lastContactsFetchResult', 'dashboardRows']);
@@ -157,6 +171,60 @@ async function downloadContactFormatWithName() {
   persistPopupState();
 }
 
+function downloadIndexedDbContactsXls(rows) {
+  if (!rows.length) return;
+
+  const headers = ['Sr No', 'Mobile No', 'Saved Name', 'Public Name'];
+  const tableRows = [headers, ...rows.map((row) => [row.srNo, row.mobile, row.savedName, row.publicName])];
+  const html = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+      <head><meta charset="UTF-8"></head>
+      <body><table>${tableRows
+        .map((cells) => `<tr>${cells.map((cell) => `<td>${String(cell ?? '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`).join('')}</tr>`)
+        .join('')}</table></body>
+    </html>
+  `;
+
+  const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const timestamp = new Date().toISOString().slice(0, 10);
+  link.href = url;
+  link.download = `wa-all-contacts-${timestamp}.xls`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function fetchAllContactsFromIndexedDb(tabId) {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: async () =>
+      await new Promise((resolve) => {
+        const request = indexedDB.open('model-storage');
+        request.onerror = () => resolve([]);
+        request.onsuccess = () => {
+          const db = request.result;
+          try {
+            const tx = db.transaction('contact', 'readonly');
+            const store = tx.objectStore('contact');
+            const query = store.getAll();
+            query.onerror = () => resolve([]);
+            query.onsuccess = () => resolve(Array.isArray(query.result) ? query.result : []);
+          } catch (error) {
+            resolve([]);
+          }
+        };
+      })
+  });
+
+  const contacts = Array.isArray(result?.result) ? result.result : [];
+  return contacts
+    .map((contact, index) => normalizeIndexedDbContact(contact, index))
+    .filter((contact) => contact.mobile || contact.savedName || contact.publicName);
+}
+
 function buildSecondaryOptions(values, placeholder = 'Select value') {
   if (!values.length) {
     ui.secondaryFilter.disabled = true;
@@ -199,6 +267,9 @@ function refreshSecondaryFilter() {
         option.textContent = CHAT_SCOPE_OPTIONS[index - 1].label;
       }
     });
+    if ([...ui.secondaryFilter.options].some((option) => option.value === 'all_chats')) {
+      ui.secondaryFilter.value = 'all_chats';
+    }
     return;
   }
 
@@ -267,9 +338,10 @@ async function fetchGroupsForSecondaryFilter() {
 async function fetchContacts() {
   ui.fetchContactsBtn.disabled = true;
   setStatus('Capturing contacts...');
+  let activeTab;
 
   try {
-    await ensureActiveWhatsAppTab();
+    activeTab = await ensureActiveWhatsAppTab();
   } catch (error) {
     ui.fetchContactsBtn.disabled = false;
     setStatus(error.message, true);
@@ -291,6 +363,36 @@ async function fetchContacts() {
     ui.fetchContactsBtn.disabled = false;
     setStatus('Choose a group from the second filter list first.', true);
     await persistPopupState();
+    return;
+  }
+
+  if (selectedPrimary === 'all_contacts' && ui.secondaryFilter.value === 'all_chats') {
+    try {
+      const indexedDbRows = await fetchAllContactsFromIndexedDb(activeTab.id);
+      latestFetchedContacts = indexedDbRows.map((row) => ({
+        phone: row.mobile,
+        name: row.savedName || row.publicName
+      }));
+      ui.downloadContactsBtn.classList.toggle('hidden', !indexedDbRows.length);
+      downloadIndexedDbContactsXls(indexedDbRows);
+      setStatus(`Downloaded ${indexedDbRows.length} contacts from WhatsApp IndexedDB.`);
+      ui.latestLog.textContent = JSON.stringify(
+        {
+          action: 'indexeddb_contacts_export',
+          filter: { primary: selectedPrimary, secondary: ui.secondaryFilter.value },
+          contacts: indexedDbRows.slice(0, 8)
+        },
+        null,
+        2
+      );
+      await persistPopupState();
+    } catch (error) {
+      setStatus(`IndexedDB export failed: ${error.message || error}`, true);
+      ui.latestLog.textContent = JSON.stringify({ success: false, error: String(error) }, null, 2);
+      await persistPopupState();
+    } finally {
+      ui.fetchContactsBtn.disabled = false;
+    }
     return;
   }
 
