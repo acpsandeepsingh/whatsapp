@@ -30,6 +30,11 @@ const contactFetchRuntime = {
   stopRequested: false
 };
 
+const GROUP_METADATA_DB = Object.freeze({
+  name: 'model-storage',
+  store: 'group-metadata'
+});
+
 function getAction(message = {}) {
   return message.action || message.type || '';
 }
@@ -353,6 +358,56 @@ async function gatherSidebarData() {
   const countryCodes = [...new Set(chats.map((c) => c.countryCode).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
   return { chats, groups, labels, countryCodes };
+}
+
+function normalizeGroupMetadataRow(row = {}, index = 0) {
+  const id = cleanText(row.id || row.gid || row.groupId || row._id || `${index}`);
+  const subject = cleanText(row.subject || row.name || row.title || '');
+  if (!subject) return null;
+  return { id, subject };
+}
+
+async function loadGroupMetadataFromIndexedDb() {
+  const openDb = () =>
+    new Promise((resolve, reject) => {
+      const req = indexedDB.open(GROUP_METADATA_DB.name);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('Unable to open IndexedDB'));
+    });
+
+  const readAll = (db) =>
+    new Promise((resolve, reject) => {
+      const tx = db.transaction(GROUP_METADATA_DB.store, 'readonly');
+      const os = tx.objectStore(GROUP_METADATA_DB.store);
+      const req = os.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error || new Error('Unable to read group metadata store'));
+    });
+
+  let db;
+  try {
+    db = await openDb();
+    const rows = await readAll(db);
+    return rows.map((row, index) => normalizeGroupMetadataRow(row, index)).filter(Boolean);
+  } catch (error) {
+    log('[GroupMetadata] IndexedDB read failed:', error?.message || error);
+    return [];
+  } finally {
+    try {
+      db?.close?.();
+    } catch (_error) {
+      // no-op
+    }
+  }
+}
+
+async function resolveGroupFilterValue(value) {
+  const selectedValue = cleanText(value);
+  if (!selectedValue) return '';
+
+  const metadata = await loadGroupMetadataFromIndexedDb();
+  const match = metadata.find((group) => group.id === selectedValue || group.subject === selectedValue);
+  return match?.subject || selectedValue;
 }
 
 async function clickFilterButton(filterName) {
@@ -935,13 +990,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.GET_GROUPS: {
+        const metadataGroups = await loadGroupMetadataFromIndexedDb();
+        if (metadataGroups.length) {
+          sendResponse({ success: true, groups: metadataGroups });
+          break;
+        }
+
         const snapshot = await gatherSidebarDataForFilter({ primary: 'group', secondary: '' });
-        sendResponse({ success: true, groups: snapshot.groups });
+        const groups = (snapshot.groups || []).map((subject, index) => ({ id: `sidebar-${index}`, subject }));
+        sendResponse({ success: true, groups });
         break;
       }
       case ACTIONS.FETCH_CONTACTS: {
         contactFetchRuntime.stopRequested = false;
-        const requestedFilter = message.filter || {};
+        const requestedFilter = { ...(message.filter || {}) };
+        if (requestedFilter.primary === 'group' && requestedFilter.secondary) {
+          requestedFilter.secondary = await resolveGroupFilterValue(requestedFilter.secondary);
+        }
         const snapshot = await gatherSidebarDataForFilter(requestedFilter);
         const enrichedChats = await enrichDirectChatsWithProfilePhones(snapshot.chats || [], requestedFilter);
         const enrichedSnapshot = { ...snapshot, chats: enrichedChats };
