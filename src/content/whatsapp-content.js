@@ -300,54 +300,15 @@ function detectChatTypeFromRow(row) {
 }
 
 async function collectSidebarRows(paneSide, shouldStop = () => false) {
-  const scrollContainer =
-    [paneSide, ...paneSide.querySelectorAll('div')]
-      .filter((node) => node && node.scrollHeight > node.clientHeight + 20)
-      .sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || paneSide;
-
   const discovered = new Map();
-  let unchangedIterations = 0;
-  let previousSize = 0;
-  const step = Math.max(220, Math.floor(scrollContainer.clientHeight * 0.9));
-  const maxIterations = 220;
-  const stableLimit = 16;
+  if (shouldStop()) return [];
 
-  scrollContainer.scrollTop = 0;
-  await wait(300);
-
-  for (let i = 0; i < maxIterations; i += 1) {
-    if (shouldStop()) break;
-
-    const visibleRows = queryAllWithFallback(SELECTORS.sidebarChatRows, paneSide).filter((row) => row.textContent?.trim());
-
-    visibleRows.forEach((row) => {
-      const chat = detectChatTypeFromRow(row);
-      const key = `${chat.name}|${chat.phone}`;
-      if (!discovered.has(key)) discovered.set(key, chat);
-    });
-
-    const nextScrollTop = Math.min(scrollContainer.scrollTop + step, Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight));
-    const reachedBottom = nextScrollTop <= scrollContainer.scrollTop + 1;
-
-    if (!reachedBottom) {
-      scrollContainer.scrollTop = nextScrollTop;
-      await wait(260);
-    } else {
-      await wait(360);
-    }
-
-    if (discovered.size === previousSize) {
-      unchangedIterations += 1;
-      if (reachedBottom && unchangedIterations >= stableLimit) break;
-    } else {
-      unchangedIterations = 0;
-    }
-
-    previousSize = discovered.size;
-  }
-
-  scrollContainer.scrollTop = 0;
-  await wait(140);
+  const visibleRows = queryAllWithFallback(SELECTORS.sidebarChatRows, paneSide).filter((row) => row.textContent?.trim());
+  visibleRows.forEach((row) => {
+    const chat = detectChatTypeFromRow(row);
+    const key = `${chat.name}|${chat.phone}`;
+    if (!discovered.has(key)) discovered.set(key, chat);
+  });
 
   return [...discovered.values()];
 }
@@ -884,16 +845,6 @@ async function ensureMembersPopupOpen(root = document) {
   return getWaPopoverBucketDialog() || getSearchMembersPopup() || null;
 }
 
-function findBestMemberScroller(root) {
-  if (!root) return null;
-  const candidates = [...root.querySelectorAll('div,section')];
-  return (
-    candidates
-      .filter((node) => node.scrollHeight > node.clientHeight + 120 && node.clientHeight > 180)
-      .sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || null
-  );
-}
-
 function collectVisibleMembersFromPanel(panel, discovered) {
   const candidates = [
     ...panel.querySelectorAll('[role="listitem"]'),
@@ -937,60 +888,20 @@ async function scrapeGroupContacts(groupName, options = {}) {
 
   const discovered = new Map();
 
-  let unchangedScrolls = 0;
-  let consecutiveBottomHits = 0;
-  let previousCount = 0;
-  let keepCurrentContextMisses = 0;
-
-  for (let i = 0; i < 240; i += 1) {
-    if (contactFetchRuntime.stopRequested) break;
-
+  if (!contactFetchRuntime.stopRequested) {
     const activePopup = getWaPopoverBucketDialog() || getSearchMembersPopup();
     const activePanel = activePopup || panel;
-    if (!activePanel) {
-      keepCurrentContextMisses += 1;
-      if (keepCurrentContextMisses >= 12) break;
-      await wait(350);
-      continue;
+    if (activePanel) {
+      panel = activePanel;
+      const rows = queryAllWithFallback(SELECTORS.participantRows, activePanel).filter(isValidParticipantRow);
+      rows.forEach((row) => {
+        const contact = readContactFromRow(row);
+        if (!contact.name || contact.name === 'Unknown') return;
+        const key = `${contact.name}|${contact.phone || ''}`;
+        if (!discovered.has(key)) discovered.set(key, { ...contact });
+      });
+      collectVisibleMembersFromPanel(activePanel, discovered);
     }
-
-    panel = activePanel;
-    keepCurrentContextMisses = 0;
-
-    const scroller = findBestMemberScroller(activePanel) || activePanel;
-    const rows = queryAllWithFallback(SELECTORS.participantRows, activePanel).filter(isValidParticipantRow);
-    rows.forEach((row) => {
-      const contact = readContactFromRow(row);
-      if (!contact.name || contact.name === 'Unknown') return;
-      const key = `${contact.name}|${contact.phone || ''}`;
-      if (!discovered.has(key)) discovered.set(key, { ...contact });
-    });
-    collectVisibleMembersFromPanel(activePanel, discovered);
-
-    const step = Math.max(480, Math.floor(scroller.clientHeight * 0.9));
-    const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-    const previousTop = scroller.scrollTop;
-    const nextTop = Math.min(previousTop + step, maxTop);
-    scroller.scrollTop = nextTop;
-    await wait(900);
-    const reachedBottom = nextTop >= maxTop - 3;
-    const stuckAtBottom = Math.abs(scroller.scrollTop - previousTop) < 4 || reachedBottom;
-
-    if (discovered.size === previousCount) {
-      unchangedScrolls += 1;
-      if (stuckAtBottom) consecutiveBottomHits += 1;
-      else consecutiveBottomHits = 0;
-
-      if (reachedBottom && unchangedScrolls >= 24 && consecutiveBottomHits >= 10) {
-        break;
-      }
-    } else {
-      unchangedScrolls = 0;
-      consecutiveBottomHits = 0;
-      keepCurrentContextMisses = 0;
-    }
-
-    previousCount = discovered.size;
   }
 
   if (resolveMissingPhones) {
