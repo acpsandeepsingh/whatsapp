@@ -141,9 +141,12 @@ function buildSecondaryOptions(values, placeholder = 'Select value') {
   ui.secondaryFilter.innerHTML = `<option value="">${placeholder}</option>`;
 
   values.forEach((value) => {
+    const optionValue = typeof value === 'string' ? value : value?.id ?? '';
+    const optionLabel = typeof value === 'string' ? value : value?.subject ?? '';
+    if (!optionLabel) return;
     const option = document.createElement('option');
-    option.value = value;
-    option.textContent = value;
+    option.value = optionValue || optionLabel;
+    option.textContent = optionLabel;
     ui.secondaryFilter.appendChild(option);
   });
 }
@@ -211,7 +214,9 @@ async function fetchSnapshot() {
   }
 
   chatSnapshot = {
-    groups: response.groups || [],
+    groups: (response.groups || []).map((group, index) =>
+      typeof group === 'string' ? { id: `snapshot-${index}`, subject: group } : group
+    ),
     countryCodes: response.countryCodes || []
   };
 
@@ -226,7 +231,9 @@ async function fetchGroupsForSecondaryFilter() {
     return;
   }
 
-  chatSnapshot.groups = response.groups || [];
+  chatSnapshot.groups = (response.groups || []).map((group, index) =>
+    typeof group === 'string' ? { id: `groups-${index}`, subject: group } : group
+  );
   refreshSecondaryFilter();
 }
 
