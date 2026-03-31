@@ -177,8 +177,8 @@ async function downloadContactFormatWithName() {
 function downloadIndexedDbContactsXls(rows) {
   if (!rows.length) return;
 
-  const headers = ['Sr No', 'Mobile No', 'Saved Name', 'Public Name', 'Groups'];
-  const tableRows = [headers, ...rows.map((row) => [row.srNo, row.mobile, row.savedName, row.publicName, row.groups || ''])];
+  const headers = ['Sr No', 'Mobile No', 'Saved Name', 'Groups', 'Public Name'];
+  const tableRows = [headers, ...rows.map((row) => [row.srNo, row.mobile, row.savedName, row.groups || '', row.publicName])];
   const html = `
     <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
       <head><meta charset="UTF-8"></head>
@@ -226,16 +226,40 @@ async function fetchAllContactsFromIndexedDb(tabId) {
           Promise.all([read('contact'), read('chat'), read('group-metadata'), read('group')])
             .then(([contacts, chats, groupMeta, groups]) => {
               const allGroups = [...chats, ...groupMeta, ...groups];
+              const collectStrings = (value, seen = new WeakSet(), bag = []) => {
+                if (typeof value === 'string') {
+                  bag.push(value);
+                  return bag;
+                }
+
+                if (!value || typeof value !== 'object') {
+                  return bag;
+                }
+
+                if (seen.has(value)) {
+                  return bag;
+                }
+
+                seen.add(value);
+                Object.values(value).forEach((entry) => collectStrings(entry, seen, bag));
+                return bag;
+              };
+
               const getId = (obj = {}) => {
-                for (const value of Object.values(obj)) {
+                const values = collectStrings(obj);
+
+                for (const value of values) {
                   if (typeof value === 'string' && value.endsWith('@c.us')) return value;
                 }
-                for (const value of Object.values(obj)) {
+
+                for (const value of values) {
                   if (typeof value === 'string' && value.includes('@')) return value;
                 }
+
                 return '';
               };
-              const getGroupName = (obj = {}) => obj.name || obj.subject || obj.formattedTitle || obj.displayName || '';
+              const getGroupName = (obj = {}) =>
+                obj.name || obj.subject || obj.title || obj.formattedTitle || obj.displayName || '';
               const hasMember = (obj = {}, id = '') => Boolean(id) && JSON.stringify(obj).includes(id);
 
               const rows = (Array.isArray(contacts) ? contacts : [])
@@ -401,7 +425,9 @@ async function fetchContacts() {
   }
 
   const selectedPrimary = ui.primaryFilter.value;
-  if (selectedPrimary !== 'popup_contacts' && selectedPrimary !== 'group') {
+  const isIndexedDbAllContactsMode = selectedPrimary === 'all_contacts' && ui.secondaryFilter.value === 'all_chats';
+
+  if (selectedPrimary !== 'popup_contacts' && selectedPrimary !== 'group' && !isIndexedDbAllContactsMode) {
     if (!(await fetchSnapshot())) {
       ui.fetchContactsBtn.disabled = false;
       await persistPopupState();
@@ -416,12 +442,13 @@ async function fetchContacts() {
     return;
   }
 
-  if (selectedPrimary === 'all_contacts' && ui.secondaryFilter.value === 'all_chats') {
+  if (isIndexedDbAllContactsMode) {
     try {
       const indexedDbRows = await fetchAllContactsFromIndexedDb(activeTab.id);
       latestFetchedContacts = indexedDbRows.map((row) => ({
         phone: row.mobile,
-        name: row.savedName || row.publicName
+        name: row.savedName || row.publicName,
+        groupName: row.groups || ''
       }));
       ui.downloadContactsBtn.classList.toggle('hidden', !indexedDbRows.length);
       downloadIndexedDbContactsXls(indexedDbRows);
