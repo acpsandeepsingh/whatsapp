@@ -60,6 +60,9 @@ async function restorePopupState() {
     [];
 
   latestFetchedContacts = restoredContacts;
+  if (!latestIndexedDbRows.length) {
+    latestIndexedDbRows = deriveIndexedDbRowsFromFetchedContacts();
+  }
   if (!latestFetchedContacts.length) {
     latestFetchedContacts = await loadContactsFromLocalDb();
   }
@@ -111,6 +114,28 @@ function normalizeIndexedDbContact(contact = {}, index = 0) {
 function extractDigitsCandidate(value = '') {
   const digits = String(value || '').replace(/\D+/g, '');
   return digits.length >= 8 ? digits : '';
+}
+
+function escapeHtmlCell(value = '') {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function deriveIndexedDbRowsFromFetchedContacts() {
+  if (!Array.isArray(latestFetchedContacts) || !latestFetchedContacts.length) return [];
+  return latestFetchedContacts
+    .map((contact, index) => ({
+      srNo: index + 1,
+      mobile: String(contact?.phone || '').trim(),
+      savedName: String(contact?.name || contact?.contactName || '').trim(),
+      groups: String(contact?.groupName || '').trim(),
+      publicName: String(contact?.publicName || '').trim()
+    }))
+    .filter((row) => row.mobile || row.savedName || row.publicName || row.groups);
 }
 
 
@@ -187,14 +212,17 @@ function downloadIndexedDbContactsXls(rows) {
   const tableRows = [headers, ...rows.map((row) => [row.srNo, row.mobile, row.savedName, row.groups || '', row.publicName])];
   const html = `
     <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
-      <head><meta charset="UTF-8"></head>
+      <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+      </head>
       <body><table>${tableRows
-        .map((cells) => `<tr>${cells.map((cell) => `<td>${String(cell ?? '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`).join('')}</tr>`)
+        .map((cells) => `<tr>${cells.map((cell) => `<td>${escapeHtmlCell(cell)}</td>`).join('')}</tr>`)
         .join('')}</table></body>
     </html>
   `;
 
-  const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+  const blob = new Blob([`\uFEFF${html}`], { type: 'application/vnd.ms-excel;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   const timestamp = new Date().toISOString().slice(0, 10);
@@ -265,6 +293,18 @@ async function fetchAllContactsFromIndexedDb(tabId) {
                   if (typeof value === 'string' && value.includes('@')) return value;
                 }
 
+                return '';
+              };
+              const getGroupId = (obj = {}) => {
+                const values = collectStrings(obj);
+                for (const value of values) {
+                  if (typeof value !== 'string') continue;
+                  if (value.endsWith('@g.us')) return value;
+                }
+                for (const value of values) {
+                  if (typeof value !== 'string') continue;
+                  if (/@g\.us/i.test(value)) return value;
+                }
                 return '';
               };
               const getGroupName = (obj = {}) =>
@@ -636,11 +676,15 @@ async function stopFetchAndClosePopup() {
 
 ui.fetchContactsBtn.addEventListener('click', fetchContacts);
 ui.downloadContactsBtn?.addEventListener('click', async () => {
-  if (latestIndexedDbRows.length && ui.primaryFilter.value === 'all_contacts' && ui.secondaryFilter.value === 'all_chats') {
-    downloadIndexedDbContactsXls(latestIndexedDbRows);
-    setStatus(`Downloaded ${latestIndexedDbRows.length} contacts in XLS format.`);
-    await persistPopupState();
-    return;
+  if (ui.primaryFilter.value === 'all_contacts' && ui.secondaryFilter.value === 'all_chats') {
+    const indexedRows = latestIndexedDbRows.length ? latestIndexedDbRows : deriveIndexedDbRowsFromFetchedContacts();
+    if (indexedRows.length) {
+      latestIndexedDbRows = indexedRows;
+      downloadIndexedDbContactsXls(indexedRows);
+      setStatus(`Downloaded ${indexedRows.length} contacts in XLS format.`);
+      await persistPopupState();
+      return;
+    }
   }
   await downloadContactFormatWithName();
 });
