@@ -267,6 +267,18 @@ async function fetchAllContactsFromIndexedDb(tabId) {
 
                 return '';
               };
+              const getGroupId = (obj = {}) => {
+                const values = collectStrings(obj);
+                for (const value of values) {
+                  if (typeof value !== 'string') continue;
+                  if (value.endsWith('@g.us')) return value;
+                }
+                for (const value of values) {
+                  if (typeof value !== 'string') continue;
+                  if (/@g\.us/i.test(value)) return value;
+                }
+                return '';
+              };
               const getGroupName = (obj = {}) =>
                 obj.name || obj.subject || obj.title || obj.formattedTitle || obj.displayName || '';
               const hasMember = (obj = {}, id = '') => Boolean(id) && JSON.stringify(obj).includes(id);
