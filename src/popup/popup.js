@@ -265,16 +265,10 @@ async function fetchAllContactsFromIndexedDb(tabId) {
                   if (typeof value === 'string' && value.includes('@')) return value;
                 }
 
-                for (const value of values) {
-                  const digits = extractDigitsCandidate(value);
-                  if (digits) return `${digits}@c.us`;
-                }
-
                 return '';
               };
               const getGroupName = (obj = {}) =>
                 obj.name || obj.subject || obj.title || obj.formattedTitle || obj.displayName || '';
-              const getGroupId = (obj = {}) => String(obj.id || obj.gid || obj.groupId || obj._id || '').trim();
               const hasMember = (obj = {}, id = '') => Boolean(id) && JSON.stringify(obj).includes(id);
               const normalizeMemberId = (value = '') => String(value || '').replace(/@c\.us$/, '').trim();
 
@@ -297,7 +291,7 @@ async function fetchAllContactsFromIndexedDb(tabId) {
                       : [];
                   const members = new Set(
                     collectStrings(candidateMembers)
-                      .map((value) => normalizeMemberId(value) || extractDigitsCandidate(value))
+                      .map(normalizeMemberId)
                       .filter(Boolean)
                   );
                   if (!name || !members.size) return null;
@@ -317,7 +311,7 @@ async function fetchAllContactsFromIndexedDb(tabId) {
                   const id = getId(contact);
                   const contactIds = new Set(
                     collectStrings(contact)
-                      .map((value) => normalizeMemberId(value) || extractDigitsCandidate(value))
+                      .map(normalizeMemberId)
                       .filter(Boolean)
                   );
                   if (id) contactIds.add(normalizeMemberId(id));
