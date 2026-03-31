@@ -108,6 +108,11 @@ function normalizeIndexedDbContact(contact = {}, index = 0) {
   };
 }
 
+function extractDigitsCandidate(value = '') {
+  const digits = String(value || '').replace(/\D+/g, '');
+  return digits.length >= 8 ? digits : '';
+}
+
 
 async function loadContactsFromLocalDb() {
   const stored = await chrome.storage.local.get(['lastContactsFetchResult', 'dashboardRows']);
@@ -319,12 +324,15 @@ async function fetchAllContactsFromIndexedDb(tabId) {
                     .map((group) => group.name);
 
                   normalized.mobile = String(id).split('@')[0] || '';
+                  if (!normalized.mobile) {
+                    normalized.mobile = extractDigitsCandidate(contact?.phone || contact?.phoneNumber || '') || '';
+                  }
                   normalized.savedName = String(contact?.name || contact?.shortName || '').trim();
                   normalized.publicName = String(contact?.pushname || '').trim();
                   normalized.groups = [...new Set([...groupNames, ...participantGroupNames])].join(' | ');
                   return normalized;
                 })
-                .filter((contact) => contact.mobile || contact.savedName || contact.publicName);
+                .filter((contact) => contact.mobile || contact.savedName || contact.publicName || contact.groups);
 
               resolve(rows);
             })
@@ -679,11 +687,11 @@ chrome.runtime.onMessage.addListener((message) => {
 
 (async function init() {
   await loadSettings();
-  ui.primaryFilter.value = ui.primaryFilter.value || 'popup_contacts';
+  ui.primaryFilter.value = ui.primaryFilter.value || 'group';
   refreshSecondaryFilter();
   await restorePopupState();
   await restoreRunningOrPreviousState();
-  if (ui.primaryFilter.value === 'group') {
+  if (ui.primaryFilter.value === 'group' || !ui.secondaryFilter.options.length) {
     await fetchGroupsForSecondaryFilter();
   }
 })();
