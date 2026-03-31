@@ -98,6 +98,27 @@ Queue worker in service worker + DOM automation in content script:
   - attachment enable/disable
   - default template
 
+## IndexedDB Contact Export Mapping
+
+When **All Contacts → All Chats** is selected from popup filters, the extension reads WhatsApp Web IndexedDB (`model-storage`) and maps records as follows:
+
+- Stores scanned:
+  - `contact` (contact records)
+  - `chat`, `group-metadata`, `group` (group-like stores used for membership/name lookup)
+- Contact ID (JID) detection:
+  1. First string value ending with `@c.us`
+  2. Otherwise first string containing `@`
+- Exported columns:
+  - `Sr No`: row index + 1
+  - `Mobile No`: `jid.split('@')[0]`
+  - `Saved Name`: `name || shortName`
+  - `Public Name`: `pushname`
+  - `Groups`: all matching group names joined by ` | `
+- Group name field priority:
+  - `name`, `subject`, `title`, `formattedTitle`, `displayName`
+
+This keeps output resilient across small shape differences in WhatsApp's internal object stores.
+
 ## Setup (Load Unpacked)
 
 1. Open `chrome://extensions`.
