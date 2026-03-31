@@ -264,7 +264,6 @@ async function fetchAllContactsFromIndexedDb(tabId) {
               };
               const getGroupName = (obj = {}) =>
                 obj.name || obj.subject || obj.title || obj.formattedTitle || obj.displayName || '';
-              const getGroupId = (obj = {}) => String(obj.id || obj.gid || obj.groupId || obj._id || '').trim();
               const hasMember = (obj = {}, id = '') => Boolean(id) && JSON.stringify(obj).includes(id);
               const normalizeMemberId = (value = '') => String(value || '').replace(/@c\.us$/, '').trim();
 
