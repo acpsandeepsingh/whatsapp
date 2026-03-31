@@ -15,6 +15,7 @@ const ui = {
 const POPUP_STATE_KEY = 'popupUiState';
 let chatSnapshot = { groups: [], countryCodes: [] };
 let latestFetchedContacts = [];
+let latestIndexedDbRows = [];
 
 const CHAT_SCOPE_OPTIONS = [
   { value: 'all_chats', label: 'All Chats' },
@@ -224,7 +225,10 @@ async function fetchAllContactsFromIndexedDb(tabId) {
             });
 
           Promise.all([read('contact'), read('chat'), read('group-metadata'), read('group')])
-            .then(([contacts, chats, groupMeta, groups]) => {
+            .then(([contacts, chats, groupMeta, groups]) =>
+              read('participant').then((participants) => [contacts, chats, groupMeta, groups, participants])
+            )
+            .then(([contacts, chats, groupMeta, groups, participants]) => {
               const allGroups = [...chats, ...groupMeta, ...groups];
               const collectStrings = (value, seen = new WeakSet(), bag = []) => {
                 if (typeof value === 'string') {
@@ -261,6 +265,34 @@ async function fetchAllContactsFromIndexedDb(tabId) {
               const getGroupName = (obj = {}) =>
                 obj.name || obj.subject || obj.title || obj.formattedTitle || obj.displayName || '';
               const hasMember = (obj = {}, id = '') => Boolean(id) && JSON.stringify(obj).includes(id);
+              const normalizeMemberId = (value = '') => String(value || '').replace(/@c\.us$/, '').trim();
+
+              const groupsById = new Map();
+              allGroups.forEach((group) => {
+                const id = getGroupId(group);
+                const name = getGroupName(group);
+                if (id && name && !groupsById.has(id)) groupsById.set(id, name);
+              });
+
+              const participantGroups = (Array.isArray(participants) ? participants : [])
+                .map((row) => {
+                  const groupId = getGroupId(row);
+                  const fromGroupStore = groupsById.get(groupId) || '';
+                  const name = fromGroupStore || getGroupName(row);
+                  const candidateMembers = Array.isArray(row?.participants)
+                    ? row.participants
+                    : Array.isArray(row?.members)
+                      ? row.members
+                      : [];
+                  const members = new Set(
+                    collectStrings(candidateMembers)
+                      .map(normalizeMemberId)
+                      .filter(Boolean)
+                  );
+                  if (!name || !members.size) return null;
+                  return { groupId, name, members };
+                })
+                .filter(Boolean);
 
               const rows = (Array.isArray(contacts) ? contacts : [])
                 .map((contact, index) => {
@@ -272,15 +304,24 @@ async function fetchAllContactsFromIndexedDb(tabId) {
                     groups: ''
                   };
                   const id = getId(contact);
+                  const contactIds = new Set(
+                    collectStrings(contact)
+                      .map(normalizeMemberId)
+                      .filter(Boolean)
+                  );
+                  if (id) contactIds.add(normalizeMemberId(id));
                   const groupNames = allGroups
                     .map((group) => ({ name: getGroupName(group), hasContact: hasMember(group, id) }))
                     .filter((entry) => entry.name && entry.hasContact)
                     .map((entry) => entry.name);
+                  const participantGroupNames = participantGroups
+                    .filter((group) => [...contactIds].some((memberId) => group.members.has(memberId)))
+                    .map((group) => group.name);
 
                   normalized.mobile = String(id).split('@')[0] || '';
                   normalized.savedName = String(contact?.name || contact?.shortName || '').trim();
                   normalized.publicName = String(contact?.pushname || '').trim();
-                  normalized.groups = [...new Set(groupNames)].join(' | ');
+                  normalized.groups = [...new Set([...groupNames, ...participantGroupNames])].join(' | ');
                   return normalized;
                 })
                 .filter((contact) => contact.mobile || contact.savedName || contact.publicName);
@@ -445,14 +486,14 @@ async function fetchContacts() {
   if (isIndexedDbAllContactsMode) {
     try {
       const indexedDbRows = await fetchAllContactsFromIndexedDb(activeTab.id);
+      latestIndexedDbRows = indexedDbRows;
       latestFetchedContacts = indexedDbRows.map((row) => ({
         phone: row.mobile,
         name: row.savedName || row.publicName,
         groupName: row.groups || ''
       }));
       ui.downloadContactsBtn.classList.toggle('hidden', !indexedDbRows.length);
-      downloadIndexedDbContactsXls(indexedDbRows);
-      setStatus(`Downloaded ${indexedDbRows.length} contacts from WhatsApp IndexedDB.`);
+      setStatus(`Fetched ${indexedDbRows.length} contacts from WhatsApp IndexedDB. Click Download to export.`);
       ui.latestLog.textContent = JSON.stringify(
         {
           action: 'indexeddb_contacts_export',
@@ -472,6 +513,8 @@ async function fetchContacts() {
     }
     return;
   }
+
+  latestIndexedDbRows = [];
 
   const payload =
     selectedPrimary === 'popup_contacts'
@@ -584,7 +627,15 @@ async function stopFetchAndClosePopup() {
 }
 
 ui.fetchContactsBtn.addEventListener('click', fetchContacts);
-ui.downloadContactsBtn?.addEventListener('click', downloadContactFormatWithName);
+ui.downloadContactsBtn?.addEventListener('click', async () => {
+  if (latestIndexedDbRows.length && ui.primaryFilter.value === 'all_contacts' && ui.secondaryFilter.value === 'all_chats') {
+    downloadIndexedDbContactsXls(latestIndexedDbRows);
+    setStatus(`Downloaded ${latestIndexedDbRows.length} contacts in XLS format.`);
+    await persistPopupState();
+    return;
+  }
+  await downloadContactFormatWithName();
+});
 ui.closePopupBtn?.addEventListener('click', stopFetchAndClosePopup);
 
 ui.primaryFilter.addEventListener('change', async () => {
