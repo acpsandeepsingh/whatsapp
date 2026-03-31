@@ -46,7 +46,11 @@ async function restorePopupState() {
   const popupState = stored[POPUP_STATE_KEY] || {};
   const lastContactsFetchResult = stored.lastContactsFetchResult || {};
 
-  if (popupState.primaryFilter) ui.primaryFilter.value = popupState.primaryFilter;
+  if (popupState.primaryFilter) {
+    ui.primaryFilter.value = popupState.primaryFilter;
+  } else {
+    ui.primaryFilter.value = 'all_contacts';
+  }
   refreshSecondaryFilter();
 
   if (popupState.secondaryFilter && !ui.secondaryFilter.disabled) {
@@ -114,15 +118,6 @@ function normalizeIndexedDbContact(contact = {}, index = 0) {
 function extractDigitsCandidate(value = '') {
   const digits = String(value || '').replace(/\D+/g, '');
   return digits.length >= 8 ? digits : '';
-}
-
-function escapeHtmlCell(value = '') {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 function deriveIndexedDbRowsFromFetchedContacts() {
@@ -205,29 +200,31 @@ async function downloadContactFormatWithName() {
   persistPopupState();
 }
 
-function downloadIndexedDbContactsXls(rows) {
+function downloadIndexedDbContactsCsv(rows) {
   if (!rows.length) return;
 
   const headers = ['Sr No', 'Mobile No', 'Saved Name', 'Groups', 'Public Name'];
-  const tableRows = [headers, ...rows.map((row) => [row.srNo, row.mobile, row.savedName, row.groups || '', row.publicName])];
-  const html = `
-    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
-      <head>
-        <meta charset="UTF-8">
-        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-      </head>
-      <body><table>${tableRows
-        .map((cells) => `<tr>${cells.map((cell) => `<td>${escapeHtmlCell(cell)}</td>`).join('')}</tr>`)
-        .join('')}</table></body>
-    </html>
-  `;
+  const csvRows = [
+    headers,
+    ...rows.map((row) => [
+      row.srNo,
+      excelTextValue(String(row.mobile || '').trim()),
+      excelTextValue(String(row.savedName || '').trim()),
+      excelTextValue(String(row.groups || '').trim()),
+      excelTextValue(String(row.publicName || '').trim())
+    ])
+  ];
 
-  const blob = new Blob([`\uFEFF${html}`], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+  const csv = csvRows
+    .map((cells) => cells.map((cell) => escapeCsvValue(cell)).join(','))
+    .join('\r\n');
+
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   const timestamp = new Date().toISOString().slice(0, 10);
   link.href = url;
-  link.download = `wa-all-contacts-${timestamp}.xls`;
+  link.download = `wa-all-contacts-${timestamp}.csv`;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -680,8 +677,8 @@ ui.downloadContactsBtn?.addEventListener('click', async () => {
     const indexedRows = latestIndexedDbRows.length ? latestIndexedDbRows : deriveIndexedDbRowsFromFetchedContacts();
     if (indexedRows.length) {
       latestIndexedDbRows = indexedRows;
-      downloadIndexedDbContactsXls(indexedRows);
-      setStatus(`Downloaded ${indexedRows.length} contacts in XLS format.`);
+      downloadIndexedDbContactsCsv(indexedRows);
+      setStatus(`Downloaded ${indexedRows.length} contacts in CSV format.`);
       await persistPopupState();
       return;
     }
@@ -731,7 +728,7 @@ chrome.runtime.onMessage.addListener((message) => {
 
 (async function init() {
   await loadSettings();
-  ui.primaryFilter.value = ui.primaryFilter.value || 'group';
+  ui.primaryFilter.value = ui.primaryFilter.value || 'all_contacts';
   refreshSecondaryFilter();
   await restorePopupState();
   await restoreRunningOrPreviousState();
