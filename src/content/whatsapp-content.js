@@ -763,6 +763,26 @@ function filterChats(snapshot = {}, filter = {}) {
   return chats;
 }
 
+function getChatRowSearchText(cell) {
+  if (!(cell instanceof HTMLElement)) return '';
+
+  const parts = [
+    cell.innerText || cell.textContent || '',
+    cell.getAttribute('title') || '',
+    cell.getAttribute('aria-label') || '',
+    cell.getAttribute('data-testid') || ''
+  ];
+  const namedNodes = cell.querySelectorAll('[title], [aria-label]');
+  namedNodes.forEach((node) => {
+    if (!(node instanceof HTMLElement)) return;
+    parts.push(node.getAttribute('title') || '');
+    parts.push(node.getAttribute('aria-label') || '');
+    parts.push(node.textContent || '');
+  });
+
+  return cleanText(parts.filter(Boolean).join(' '));
+}
+
 async function openChat(queryValue) {
   assertRunning('open-chat-start');
   const query = String(queryValue || '').trim();
@@ -790,7 +810,7 @@ async function openChat(queryValue) {
 
     const matchedCell =
       sidebarCells.find((cell) => {
-        const cellText = cleanText(cell.innerText || cell.textContent || '');
+        const cellText = getChatRowSearchText(cell);
         if (!cellText) return false;
         const cellTextLower = cellText.toLowerCase();
         if (cellTextLower.includes(normalizedQueryLower) || normalizedQueryLower.includes(cellTextLower)) return true;
