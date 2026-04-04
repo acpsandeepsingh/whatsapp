@@ -1074,7 +1074,14 @@ async function openChat(queryValue) {
       const variantLower = variant.value.toLowerCase();
       const variantNormalized = normalizePhone(variant.value);
       const variantRelaxed = variantLower.replace(/[^a-z0-9]+/g, '');
-      const sidebarCells = getSidebarSearchCandidates();
+      const sidebarCells = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((cell) => {
+        if (!(cell instanceof HTMLElement)) return false;
+        if (cell.hidden) return false;
+        const style = window.getComputedStyle(cell);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const rect = cell.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
       if (!sidebarCells.length) throw new Error('No visible sidebar chat item found');
       const debugRows = collectSidebarSearchDebugData(sidebarCells);
       log('[Search][Results] Visible rows:', debugRows.length);
@@ -1094,13 +1101,7 @@ async function openChat(queryValue) {
         }))
         .filter((entry) => entry.score >= 0)
         .sort((a, b) => b.score - a.score);
-      const matchedCell =
-        scoredMatches[0]?.cell ||
-        sidebarCells.find((cell) => {
-          const text = getChatRowSearchText(cell);
-          return hasMeaningfulChatRowText(text);
-        }) ||
-        (sidebarCells.length === 1 ? sidebarCells[0] : null);
+      const matchedCell = scoredMatches[0]?.cell || (sidebarCells.length === 1 ? sidebarCells[0] : null);
 
       if (!matchedCell) {
         log('[Search][Results][NoMatch]', {
@@ -1132,14 +1133,6 @@ async function openChat(queryValue) {
       if (!switched) {
         log('[Chat] Primary click not confirmed, retrying click + enter fallback');
         await clickChatRow(clickableTarget);
-        const searchInput = queryWithFallback(SELECTORS.chatSearchInputs);
-        if (searchInput instanceof HTMLElement) {
-          searchInput.focus();
-          searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
-          searchInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
-          searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-          searchInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        }
         const active = document.activeElement;
         if (active instanceof HTMLElement) {
           active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
