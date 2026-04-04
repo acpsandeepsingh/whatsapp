@@ -139,8 +139,10 @@ function summarizeElementForLog(node) {
 }
 
 function setupWhatsAppInteractionDebugLogs() {
-  if (globalThis.__WA_CRM_CLICK_LOGGING_READY__) return;
+  const debugLogAttr = 'data-wa-crm-click-logging-ready';
+  if (globalThis.__WA_CRM_CLICK_LOGGING_READY__ || document.documentElement?.hasAttribute(debugLogAttr)) return;
   globalThis.__WA_CRM_CLICK_LOGGING_READY__ = true;
+  document.documentElement?.setAttribute(debugLogAttr, '1');
 
   document.addEventListener(
     'click',
@@ -163,6 +165,13 @@ function setupWhatsAppInteractionDebugLogs() {
 
       const clickable = preferredTarget || target?.closest('button, [role="button"], [role="option"], [data-testid], [title], [aria-label]');
       const summary = summarizeElementForLog((clickable instanceof Element ? clickable : null) || target);
+      const now = Date.now();
+      const lastSummary = document.documentElement?.getAttribute('data-wa-crm-last-click-summary') || '';
+      const lastTsRaw = document.documentElement?.getAttribute('data-wa-crm-last-click-ts') || '0';
+      const lastTs = Number(lastTsRaw) || 0;
+      if (summary === lastSummary && now - lastTs < 400) return;
+      document.documentElement?.setAttribute('data-wa-crm-last-click-summary', summary);
+      document.documentElement?.setAttribute('data-wa-crm-last-click-ts', String(now));
       log('[Debug][Click]', summary);
     },
     true
@@ -950,11 +959,14 @@ async function openChat(queryValue) {
     clickableTarget.scrollIntoView({ block: 'center', behavior: 'instant' });
     await wait(200);
     assertRunning('open-chat-click');
-    simulateUserClick(clickableTarget);
     if (typeof clickableTarget.click === 'function') clickableTarget.click();
     log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''));
 
-    const switched = await confirmChatSwitched(query, 12000);
+    let switched = await confirmChatSwitched(query, 2500);
+    if (!switched) {
+      simulateUserClick(clickableTarget);
+      switched = await confirmChatSwitched(query, 9500);
+    }
     if (switched) {
       const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
       if (messageBox) return messageBox;
