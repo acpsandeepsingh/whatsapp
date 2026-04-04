@@ -813,6 +813,35 @@ function collectSidebarSearchDebugData(sidebarCells = []) {
   });
 }
 
+function resolveChatClickableTarget(cell) {
+  if (!(cell instanceof HTMLElement)) return null;
+
+  const baseGridCell =
+    cell.closest('[role="gridcell"]') ||
+    (cell.getAttribute('role') === 'gridcell' ? cell : null) ||
+    cell;
+  if (!(baseGridCell instanceof HTMLElement)) return null;
+
+  const row = baseGridCell.closest('[role="row"]');
+  const candidateRoots = [baseGridCell, row].filter((node) => node instanceof HTMLElement);
+  const targetSelectors = [
+    '[data-testid="cell-frame-container"]',
+    'div[aria-selected]',
+    'div[tabindex="-1"]',
+    'div[tabindex="0"]',
+    '[role="button"]'
+  ];
+
+  for (const root of candidateRoots) {
+    for (const selector of targetSelectors) {
+      const candidate = root.querySelector(selector);
+      if (candidate instanceof HTMLElement) return candidate;
+    }
+  }
+
+  return baseGridCell;
+}
+
 async function openChat(queryValue) {
   assertRunning('open-chat-start');
   const query = String(queryValue || '').trim();
@@ -872,14 +901,12 @@ async function openChat(queryValue) {
       throw new Error(`No matching visible chat found for query: ${query}`);
     }
 
-    const clickableTarget =
-      matchedCell.querySelector(
-        '[data-testid="cell-frame-container"], [role="button"], [tabindex], button, a, div[aria-selected], div[aria-label], div[title]'
-      ) || matchedCell;
+    const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
     clickableTarget.scrollIntoView({ block: 'center', behavior: 'instant' });
     await wait(200);
     assertRunning('open-chat-click');
     simulateUserClick(clickableTarget);
+    if (typeof clickableTarget.click === 'function') clickableTarget.click();
     log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''));
 
     const switched = await confirmChatSwitched(query, 12000);
