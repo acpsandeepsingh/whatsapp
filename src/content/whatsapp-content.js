@@ -783,6 +783,36 @@ function getChatRowSearchText(cell) {
   return cleanText(parts.filter(Boolean).join(' '));
 }
 
+function collectSidebarSearchDebugData(sidebarCells = []) {
+  return sidebarCells.map((cell, index) => {
+    if (!(cell instanceof HTMLElement)) {
+      return { index, validElement: false };
+    }
+
+    const rect = cell.getBoundingClientRect();
+    const style = window.getComputedStyle(cell);
+    const text = getChatRowSearchText(cell);
+    const titleNode = cell.querySelector('[title]');
+    const ariaNode = cell.querySelector('[aria-label]');
+
+    return {
+      index,
+      validElement: true,
+      text,
+      normalizedText: normalizePhone(text),
+      hidden: cell.hidden,
+      display: style.display,
+      visibility: style.visibility,
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      dataTestId: cell.getAttribute('data-testid') || '',
+      role: cell.getAttribute('role') || '',
+      title: cleanText(cell.getAttribute('title') || titleNode?.getAttribute?.('title') || ''),
+      ariaLabel: cleanText(cell.getAttribute('aria-label') || ariaNode?.getAttribute?.('aria-label') || '')
+    };
+  });
+}
+
 async function openChat(queryValue) {
   assertRunning('open-chat-start');
   const query = String(queryValue || '').trim();
@@ -807,6 +837,15 @@ async function openChat(queryValue) {
       return rect.width > 0 && rect.height > 0;
     });
     if (!sidebarCells.length) throw new Error('No visible sidebar chat item found');
+    const debugRows = collectSidebarSearchDebugData(sidebarCells);
+    log('[Search][Results] Visible rows:', debugRows.length);
+    log('[Search][Results][Data]', {
+      query,
+      normalizedQuery,
+      queryLower: normalizedQueryLower,
+      relaxedQuery,
+      rows: debugRows
+    });
 
     const matchedCell =
       sidebarCells.find((cell) => {
@@ -822,7 +861,16 @@ async function openChat(queryValue) {
       }) ||
       (sidebarCells.length === 1 ? sidebarCells[0] : null);
 
-    if (!matchedCell) throw new Error(`No matching visible chat found for query: ${query}`);
+    if (!matchedCell) {
+      log('[Search][Results][NoMatch]', {
+        query,
+        normalizedQuery,
+        queryLower: normalizedQueryLower,
+        relaxedQuery,
+        rows: debugRows
+      });
+      throw new Error(`No matching visible chat found for query: ${query}`);
+    }
 
     const clickableTarget =
       matchedCell.querySelector(
