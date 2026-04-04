@@ -258,6 +258,37 @@ function isLikelyPhoneQuery(value) {
   return normalizePhone(value).length >= 7;
 }
 
+function getSearchQueryVariants(queryValue) {
+  const query = cleanText(queryValue);
+  if (!query) return [];
+
+  const normalized = normalizePhone(query);
+  const variants = [];
+  const addVariant = (value, reason) => {
+    const candidate = cleanText(value);
+    if (!candidate) return;
+    if (variants.some((item) => item.value.toLowerCase() === candidate.toLowerCase())) return;
+    variants.push({ value: candidate, reason });
+  };
+
+  addVariant(query, 'original');
+
+  if (normalized && normalized !== query) {
+    addVariant(normalized, 'normalized_digits');
+    addVariant(`+${normalized}`, 'normalized_plus');
+  }
+
+  if (normalized.length > 7) {
+    addVariant(normalized.slice(-10), 'last_10_digits');
+    addVariant(normalized.slice(-8), 'last_8_digits');
+  }
+
+  if (query.includes('+')) addVariant(query.replace(/\+/g, ''), 'without_plus');
+  if (/[-()\s]/.test(query)) addVariant(query.replace(/[-()\s]/g, ''), 'without_separators');
+
+  return variants;
+}
+
 function isPhoneMatch(queryText, rowText) {
   const queryPhone = normalizePhone(queryText);
   const rowPhone = normalizePhone(rowText);
@@ -417,7 +448,13 @@ async function typeSearch(query) {
       await wait(randomBetween(80, 150));
     }
   }
-  log('[Search] Typing completed:', value);
+  const typedValue =
+    searchBox instanceof HTMLInputElement
+      ? searchBox.value
+      : searchBox instanceof HTMLElement
+        ? cleanText(searchBox.textContent || '')
+        : '';
+  log('[Search] Typing completed:', value, '=> typed:', typedValue);
 }
 
 async function waitForSearchResults(timeoutMs = 10000) {
@@ -963,70 +1000,95 @@ async function openChat(queryValue) {
   assertRunning('open-chat-start');
   const query = String(queryValue || '').trim();
   if (!query) throw new Error('Missing contact/group search query.');
-  const normalizedQuery = normalizePhone(query);
-  const normalizedQueryLower = query.toLowerCase();
-  const relaxedQuery = normalizedQueryLower.replace(/[^a-z0-9]+/g, '');
 
+  const queryVariants = getSearchQueryVariants(query);
   log('[Chat] Opening chat:', query);
+  log('[Chat] Query variants:', queryVariants);
   await ensureWhatsAppReady();
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    assertRunning('open-chat-attempt');
-    log(`[Chat] Attempt ${attempt} for ${query}`);
-    await typeSearch(query);
-    await waitForSearchResults(10000);
-    const sidebarCells = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((cell) => {
-      if (!(cell instanceof HTMLElement)) return false;
-      if (cell.hidden) return false;
-      const style = window.getComputedStyle(cell);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
-      const rect = cell.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    });
-    if (!sidebarCells.length) throw new Error('No visible sidebar chat item found');
-    const debugRows = collectSidebarSearchDebugData(sidebarCells);
-    log('[Search][Results] Visible rows:', debugRows.length);
-    log('[Search][Results][Data]', {
-      query,
-      normalizedQuery,
-      queryLower: normalizedQueryLower,
-      relaxedQuery,
-      rows: debugRows
-    });
-
-    const scoredMatches = sidebarCells
-      .map((cell) => ({ cell, score: scoreChatSearchMatch(query, normalizedQuery, normalizedQueryLower, relaxedQuery, getChatRowSearchText(cell)) }))
-      .filter((entry) => entry.score >= 0)
-      .sort((a, b) => b.score - a.score);
-    const matchedCell = scoredMatches[0]?.cell || (sidebarCells.length === 1 ? sidebarCells[0] : null);
-
-    if (!matchedCell) {
-      log('[Search][Results][NoMatch]', {
+  let globalAttempt = 0;
+  for (const variant of queryVariants) {
+    for (let variantAttempt = 1; variantAttempt <= 3; variantAttempt += 1) {
+      globalAttempt += 1;
+      assertRunning('open-chat-attempt');
+      log(`[Chat] Attempt ${globalAttempt} (variant #${variantAttempt}, reason=${variant.reason}) for ${variant.value}`);
+      await typeSearch(variant.value);
+      await waitForSearchResults(10000);
+      const variantLower = variant.value.toLowerCase();
+      const variantNormalized = normalizePhone(variant.value);
+      const variantRelaxed = variantLower.replace(/[^a-z0-9]+/g, '');
+      const sidebarCells = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((cell) => {
+        if (!(cell instanceof HTMLElement)) return false;
+        if (cell.hidden) return false;
+        const style = window.getComputedStyle(cell);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const rect = cell.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      if (!sidebarCells.length) throw new Error('No visible sidebar chat item found');
+      const debugRows = collectSidebarSearchDebugData(sidebarCells);
+      log('[Search][Results] Visible rows:', debugRows.length);
+      log('[Search][Results][Data]', {
         query,
-        normalizedQuery,
-        queryLower: normalizedQueryLower,
-        relaxedQuery,
-        candidateScores: sidebarCells.map((cell) => ({
-          text: getChatRowSearchText(cell),
-          score: scoreChatSearchMatch(query, normalizedQuery, normalizedQueryLower, relaxedQuery, getChatRowSearchText(cell))
-        })),
+        variant,
+        normalizedQuery: variantNormalized,
+        queryLower: variantLower,
+        relaxedQuery: variantRelaxed,
         rows: debugRows
       });
-      throw new Error(`No matching visible chat found for query: ${query}`);
-    }
 
-    assertRunning('open-chat-click');
-    const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
-    await clickChatRow(clickableTarget);
-    log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''));
+      const scoredMatches = sidebarCells
+        .map((cell) => ({
+          cell,
+          score: scoreChatSearchMatch(variant.value, variantNormalized, variantLower, variantRelaxed, getChatRowSearchText(cell))
+        }))
+        .filter((entry) => entry.score >= 0)
+        .sort((a, b) => b.score - a.score);
+      const matchedCell = scoredMatches[0]?.cell || (sidebarCells.length === 1 ? sidebarCells[0] : null);
 
-    let switched = await confirmChatSwitched(query, 3200);
-    if (!switched) await clickChatRow(clickableTarget);
-    switched = switched || (await confirmChatSwitched(query, 9500));
-    if (switched) {
-      const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
-      if (messageBox) return messageBox;
+      if (!matchedCell) {
+        log('[Search][Results][NoMatch]', {
+          query,
+          variant,
+          normalizedQuery: variantNormalized,
+          queryLower: variantLower,
+          relaxedQuery: variantRelaxed,
+          candidateScores: sidebarCells.map((cell) => ({
+            text: getChatRowSearchText(cell),
+            score: scoreChatSearchMatch(variant.value, variantNormalized, variantLower, variantRelaxed, getChatRowSearchText(cell))
+          })),
+          rows: debugRows
+        });
+        log('[Chat][Attempt] No matched row, trying next variant/attempt');
+        if (variantAttempt < 3) {
+          await wait(600);
+          continue;
+        }
+        break;
+      }
+
+      assertRunning('open-chat-click');
+      const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
+      const clickResult = await clickChatRow(clickableTarget);
+      log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''), 'clickResult=', clickResult);
+
+      let switched = await confirmChatSwitched(variant.value, 3200);
+      if (!switched) {
+        log('[Chat] Primary click not confirmed, retrying click + enter fallback');
+        await clickChatRow(clickableTarget);
+        const active = document.activeElement;
+        if (active instanceof HTMLElement) {
+          active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+          active.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+        }
+      }
+      switched = switched || (await confirmChatSwitched(variant.value, 9500));
+      if (switched) {
+        const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
+        if (messageBox) return messageBox;
+      }
+      log('[Chat] Switch confirmation failed for attempt', { query, variant });
+      if (variantAttempt < 3) await wait(800);
     }
-    if (attempt < 3) await wait(800);
   }
 
   throw new Error(`Unable to open chat for query: ${query}`);
