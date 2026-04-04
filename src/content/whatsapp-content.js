@@ -288,19 +288,74 @@ function queryAllWithFallback(selectors, root = document) {
 }
 
 function getComposerBox() {
-  const footerComposer = queryWithFallback(SELECTORS.messageBox);
-  if (footerComposer instanceof HTMLElement) return footerComposer;
+  return getActiveMessageBox();
+}
 
-  const candidates = queryAllWithFallback(['div[contenteditable="true"][role="textbox"]']);
+function isVisibleElement(node) {
+  if (!(node instanceof HTMLElement)) return false;
+  if (!node.isConnected) return false;
+  if (node.hidden) return false;
+  if (node.getAttribute('aria-hidden') === 'true') return false;
+  if (node.getAttribute('contenteditable') === 'false') return false;
+
+  const style = window.getComputedStyle(node);
+  if (style.display === 'none' || style.visibility === 'hidden') return false;
+  if (Number(style.opacity || 1) === 0) return false;
+
+  const rect = node.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+function getActiveMessageBox() {
+  const footer = document.querySelector('footer');
+  if (!(footer instanceof HTMLElement)) return null;
+
+  const candidates = [...footer.querySelectorAll('[contenteditable="true"], div[role="textbox"][contenteditable]')].filter(
+    (node) => node instanceof HTMLElement
+  );
+  if (!candidates.length) return null;
+
+  const visibleCandidates = candidates.filter((candidate) => isVisibleElement(candidate));
+  if (!visibleCandidates.length) return null;
+
+  const activeElement = document.activeElement;
+  if (activeElement instanceof HTMLElement) {
+    const activeCandidate = activeElement.closest('footer [contenteditable], footer div[role="textbox"]');
+    if (activeCandidate instanceof HTMLElement && visibleCandidates.includes(activeCandidate) && activeCandidate.isContentEditable) {
+      return activeCandidate;
+    }
+  }
+
+  const selectorMatch = visibleCandidates.find((candidate) =>
+    SELECTORS.messageBox.some((selector) => {
+      try {
+        return candidate.matches(selector);
+      } catch (_error) {
+        return false;
+      }
+    })
+  );
+  if (selectorMatch instanceof HTMLElement && selectorMatch.isContentEditable) return selectorMatch;
+
   return (
-    candidates.find((candidate) => {
-      if (!(candidate instanceof HTMLElement)) return false;
-      if (candidate.closest('footer')) return true;
-      if (candidate.closest('aside, header, [data-testid="chat-list-search"]')) return false;
+    visibleCandidates.find((candidate) => {
+      if (!candidate.isContentEditable) return false;
+      if (candidate.closest('aside, header, [role="dialog"]')) return false;
       const ariaLabel = cleanText(candidate.getAttribute('aria-label') || '').toLowerCase();
-      return ariaLabel.includes('message');
+      return !ariaLabel || ariaLabel.includes('message') || ariaLabel.includes('type');
     }) || null
   );
+}
+
+async function waitForActiveMessageBox(timeoutMs = 16000, pollMs = 120) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    assertRunning('wait-active-message-box');
+    const box = getActiveMessageBox();
+    if (box instanceof HTMLElement) return box;
+    await wait(pollMs);
+  }
+  return null;
 }
 
 function normalizePhone(value) {
@@ -589,7 +644,7 @@ async function typeMessage(message, { delayPerChar = 45, confirmTimeoutMs = 1500
     const text = String(message || '');
     if (!text.trim()) throw new Error('Message is empty after template processing');
 
-    const box = await waitForElement(SELECTORS.messageBox, 15000);
+    const box = await waitForActiveMessageBox(16000);
     if (!(box instanceof HTMLElement)) throw new Error('Message box is not editable.');
 
     clearEditableBox(box);
@@ -599,7 +654,7 @@ async function typeMessage(message, { delayPerChar = 45, confirmTimeoutMs = 1500
     let typedChars = 0;
     for (const char of text) {
       assertRunning('message-typing');
-      const activeBox = getComposerBox();
+      const activeBox = getActiveMessageBox();
       if (!(activeBox instanceof HTMLElement)) throw new Error('Message box disappeared during typing.');
       activeBox.focus();
       activeBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
@@ -614,7 +669,7 @@ async function typeMessage(message, { delayPerChar = 45, confirmTimeoutMs = 1500
     const started = Date.now();
     while (Date.now() - started < confirmTimeoutMs) {
       assertRunning('message-confirm');
-      const currentBox = getComposerBox();
+      const currentBox = getActiveMessageBox();
       if (!(currentBox instanceof HTMLElement)) {
         await wait(120);
         continue;
@@ -1220,7 +1275,7 @@ async function openChat(queryValue) {
           let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: fallbackRowText });
           if (!switched) switched = await confirmChatSwitched(query, 9500, { clickedRowText: fallbackRowText });
           if (switched) {
-            const messageBox = await waitForElement(SELECTORS.messageBox, 16000);
+            const messageBox = await waitForActiveMessageBox(16000);
             if (messageBox) return messageBox;
           }
           log('[Chat] Fallback click did not confirm chat switch', { query, variant });
@@ -1263,7 +1318,7 @@ async function openChat(queryValue) {
       }
       switched = switched || (await confirmChatSwitched(variant.value, 9500, { clickedRowText: matchedRowText }));
       if (switched) {
-        const messageBox = await waitForElement(SELECTORS.messageBox, 16000);
+        const messageBox = await waitForActiveMessageBox(16000);
         if (messageBox) return messageBox;
       }
       log('[Chat] Switch confirmation failed for attempt', { query, variant });
@@ -1310,7 +1365,7 @@ async function openChatByPhone(phone) {
 
 async function sendMessageSafe() {
   assertRunning('send-before');
-  const box = getComposerBox();
+  const box = getActiveMessageBox();
   if (!(box instanceof HTMLElement)) throw new Error('Message box not found');
   await wait(200);
   assertRunning('send-enter');
@@ -1330,7 +1385,7 @@ async function setMessageAndSend(text) {
     log('[Message] Send skipped (STOP triggered)');
     assertRunning('send-protection');
   }
-  const latestBox = getComposerBox();
+  const latestBox = getActiveMessageBox();
   const latestText = getEditableText(latestBox);
   if (latestText !== message) throw new Error('Send blocked because message text is not fully typed.');
   await sendMessageSafe();
