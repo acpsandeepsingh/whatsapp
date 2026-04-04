@@ -9,6 +9,7 @@ const state = {
   running: false,
   processing: false,
   paused: false,
+  stopRequested: false,
   campaignId: null,
   stats: {
     total: 0,
@@ -236,6 +237,7 @@ async function startCampaign(rows = [], incomingSettings = {}) {
   state.running = true;
   state.processing = false;
   state.paused = false;
+  state.stopRequested = false;
   state.campaignId = `campaign-${Date.now()}`;
   state.stats = {
     total: state.queue.length,
@@ -245,7 +247,14 @@ async function startCampaign(rows = [], incomingSettings = {}) {
     retries: 0
   };
 
-  await getWhatsAppTab();
+  try {
+    await getWhatsAppTab();
+  } catch (error) {
+    state.running = false;
+    state.stopRequested = false;
+    throw error;
+  }
+  await chrome.storage.local.set({ isRunning: true });
   await broadcastProgress({ status: 'started' });
   processQueue(state.campaignId);
   return getProgress();
@@ -257,6 +266,10 @@ async function processQueue(campaignId = state.campaignId) {
 
   try {
     while (state.currentIndex < state.queue.length && state.running && campaignId === state.campaignId) {
+      if (state.stopRequested) {
+        state.running = false;
+        break;
+      }
       if (state.paused) {
         await wait(300);
         continue;
@@ -318,13 +331,24 @@ async function processQueue(campaignId = state.campaignId) {
         });
       }
 
-      await wait(getPerMessageDelay());
+      if (state.stopRequested) {
+        state.running = false;
+        break;
+      }
+      await wait(Math.max(2000, Math.min(5000, getPerMessageDelay())));
     }
 
     if (state.currentIndex >= state.queue.length && campaignId === state.campaignId) {
       state.running = false;
       state.paused = false;
+      state.stopRequested = false;
+      await chrome.storage.local.set({ isRunning: false });
       await broadcastProgress({ status: 'completed' });
+    } else if (!state.running && campaignId === state.campaignId) {
+      state.paused = false;
+      state.stopRequested = false;
+      await chrome.storage.local.set({ isRunning: false });
+      await broadcastProgress({ status: 'stopped' });
     }
   } finally {
     state.processing = false;
@@ -453,12 +477,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.STOP_AUTOMATION: {
-        state.running = false;
-        state.processing = false;
-        state.paused = false;
-        state.campaignId = null;
-        await broadcastProgress({ status: 'stopped' });
-        sendResponse({ success: true });
+        state.stopRequested = true;
+        await chrome.storage.local.set({ isRunning: false });
+        sendResponse({ success: true, stopping: true });
         break;
       }
       default: {
@@ -493,9 +514,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 chrome.runtime.onInstalled.addListener(async () => {
   state.settings = await loadSettings();
-  await chrome.storage.local.set({ settings: state.settings, campaignState: getProgress() });
+  await chrome.storage.local.set({ settings: state.settings, campaignState: getProgress(), isRunning: false });
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   state.settings = await loadSettings();
+  await chrome.storage.local.set({ isRunning: false });
 });
