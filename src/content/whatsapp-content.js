@@ -138,6 +138,27 @@ function summarizeElementForLog(node) {
   return parts.join('');
 }
 
+function getElementDebugPath(node, maxDepth = 6) {
+  if (!(node instanceof Element)) return [];
+  const path = [];
+  let current = node;
+  let depth = 0;
+  while (current && depth < maxDepth) {
+    const part = {
+      tag: current.tagName?.toLowerCase() || 'unknown',
+      id: current.id || '',
+      role: current.getAttribute('role') || '',
+      testId: current.getAttribute('data-testid') || '',
+      title: cleanText(current.getAttribute('title') || ''),
+      ariaLabel: cleanText(current.getAttribute('aria-label') || '')
+    };
+    path.push(part);
+    current = current.parentElement;
+    depth += 1;
+  }
+  return path;
+}
+
 function setupWhatsAppInteractionDebugLogs() {
   const debugLogAttr = 'data-wa-crm-click-logging-ready';
   if (globalThis.__WA_CRM_CLICK_LOGGING_READY__ || document.documentElement?.hasAttribute(debugLogAttr)) return;
@@ -461,11 +482,7 @@ async function waitForSearchResults(timeoutMs = 10000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     assertRunning('search-results');
-    const paneSide = queryWithFallback(SELECTORS.paneSide);
-    const rows = queryAllWithFallback(
-      ['#pane-side [role="gridcell"]', '#pane-side [role="grid"] [role="row"] [role="gridcell"]'],
-      paneSide || document
-    ).filter((row) => row?.textContent?.trim());
+    const rows = getSidebarSearchCandidates();
     if (rows.length) {
       log('[Search] Gridcell found:', rows.length);
       return rows;
@@ -906,6 +923,42 @@ function collectSidebarSearchDebugData(sidebarCells = []) {
   });
 }
 
+function hasMeaningfulChatRowText(value) {
+  const text = cleanText(value);
+  if (!text) return false;
+  if (text.length < 3) return false;
+  return /[a-z0-9]/i.test(text);
+}
+
+function getSidebarSearchCandidates() {
+  const rawNodes = queryAllWithFallback(SELECTORS.sidebarChatRows);
+  const unique = new Set();
+  const normalized = [];
+
+  rawNodes.forEach((node) => {
+    if (!(node instanceof HTMLElement)) return;
+    const candidate =
+      node.closest('[role="row"] [role="gridcell"][tabindex]') ||
+      node.closest('[role="row"]') ||
+      node.closest('[data-testid="cell-frame-container"]') ||
+      node;
+    if (!(candidate instanceof HTMLElement)) return;
+    if (unique.has(candidate)) return;
+    unique.add(candidate);
+    normalized.push(candidate);
+  });
+
+  return normalized.filter((cell) => {
+    if (cell.hidden) return false;
+    const style = window.getComputedStyle(cell);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = cell.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const text = getChatRowSearchText(cell);
+    return hasMeaningfulChatRowText(text);
+  });
+}
+
 function resolveChatClickableTarget(cell) {
   if (!(cell instanceof HTMLElement)) return null;
 
@@ -976,6 +1029,11 @@ async function clickChatRow(node) {
     .filter((candidate) => candidate instanceof HTMLElement);
   const target = candidates[0] || (findVisibleChatTarget(node) instanceof HTMLElement ? findVisibleChatTarget(node) : null);
   if (!(target instanceof HTMLElement)) return false;
+
+  log('[Chat][Click][TargetSnapshot]', {
+    summary: summarizeElementForLog(target),
+    path: getElementDebugPath(target, 8)
+  });
 
   target.scrollIntoView({ block: 'center', behavior: 'instant' });
   await wait(150);
