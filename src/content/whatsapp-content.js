@@ -45,6 +45,7 @@ const SELECTORS = {
   appReady: ['#app'],
   paneSide: ['#pane-side'],
   chatSearchInputs: [
+    'input[aria-label="Search or start a new chat"]',
     '[data-testid="chat-list-search"] [contenteditable="true"]',
     '[data-testid="chat-list-search"] [role="textbox"]',
     '[aria-label="Search input textbox"][contenteditable="true"]',
@@ -260,8 +261,24 @@ function setEditableValue(el, value) {
   el.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
 }
 
+function setInputValueByTyping(input, value) {
+  if (!(input instanceof HTMLInputElement)) return;
+  input.focus();
+  input.select();
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+
+  const text = String(value || '');
+  for (const char of text) {
+    input.value += char;
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+  }
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
 async function waitForElement(selectors, timeoutMs = 25000, pollMs = 250, root = document) {
-  const immediate = queryWithFallback(selectors, root);
+  const normalizedSelectors = Array.isArray(selectors) ? selectors : [selectors];
+  const immediate = queryWithFallback(normalizedSelectors, root);
   if (immediate) return immediate;
 
   if (typeof MutationObserver === 'function') {
@@ -275,7 +292,7 @@ async function waitForElement(selectors, timeoutMs = 25000, pollMs = 250, root =
       }, timeoutMs);
 
       const observer = new MutationObserver(() => {
-        const found = queryWithFallback(selectors, root);
+        const found = queryWithFallback(normalizedSelectors, root);
         if (!found || resolved) return;
         resolved = true;
         clearTimeout(timer);
@@ -293,7 +310,7 @@ async function waitForElement(selectors, timeoutMs = 25000, pollMs = 250, root =
 
   const maxTries = Math.ceil(timeoutMs / pollMs);
   for (let i = 0; i < maxTries; i += 1) {
-    const found = queryWithFallback(selectors, root);
+    const found = queryWithFallback(normalizedSelectors, root);
     if (found) return found;
     await wait(pollMs);
   }
@@ -584,33 +601,25 @@ async function openChatBySearch(queryValue) {
   const query = String(queryValue || '').trim();
   if (!query) throw new Error('Missing contact/group search query.');
 
-  await ensureWhatsAppReady({ requireSearch: true });
-  const searchBox = await waitForElement(SELECTORS.chatSearchInputs, 12000);
+  log(`Opening chat: ${query}`);
+  await ensureWhatsAppReady();
+  const searchBox = await waitForElement('input[aria-label="Search or start a new chat"]', 12000);
   if (!searchBox) throw new Error('Search box not found in WhatsApp sidebar.');
 
-  setEditableValue(searchBox, query);
-  await wait(600);
-  await waitForElement(SELECTORS.sidebarChatRows, 5000);
+  setInputValueByTyping(searchBox, '');
+  await wait(150);
+  setInputValueByTyping(searchBox, query);
+  await wait(1200);
 
-  const sideRows = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((row) => row.textContent?.trim());
-  const normalizedQuery = query.toLowerCase();
+  const firstChat = await waitForElement('#pane-side div[role="listitem"]', 7000);
+  if (!firstChat) throw new Error(`No sidebar chat item found for: ${query}`);
+  simulateUserClick(firstChat);
 
-  const candidate =
-    sideRows.find((row) => (row.textContent || '').toLowerCase().includes(normalizedQuery)) ||
-    sideRows.find((row) => normalizePhone(row.textContent || '').includes(normalizePhone(query)));
-
-  if (candidate) {
-    candidate.click();
-  } else {
-    searchBox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-  }
-
-  await wait(700);
-
-  setEditableValue(searchBox, '');
+  await wait(800);
+  setInputValueByTyping(searchBox, '');
   searchBox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
 
-  const messageBox = await waitForElement(SELECTORS.messageBox, 16000);
+  const messageBox = await waitForElement('[contenteditable="true"][role="textbox"]', 16000);
   if (!messageBox) throw new Error(`Unable to open chat for query: ${query}`);
   return messageBox;
 }
@@ -625,18 +634,20 @@ async function setMessageAndSend(text) {
   const message = String(text || '').trim();
   if (!message) throw new Error('Message is empty after template processing');
 
-  const box = await waitForElement(SELECTORS.messageBox, 15000);
+  const box = await waitForElement('[contenteditable="true"][role="textbox"]', 15000);
   if (!box) throw new Error('Message box not found');
 
-  setEditableValue(box, message);
+  box.focus();
+  document.execCommand('selectAll', false, null);
+  document.execCommand('delete', false, null);
+  document.execCommand('insertText', false, message);
+  box.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: message }));
+  log('Message inserted');
   await wait(250);
 
-  const sendEl = queryWithFallback(SELECTORS.sendButton);
-  if (sendEl) {
-    simulateUserClick(sendEl.closest('button') || sendEl);
-  } else {
-    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-  }
+  box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+  box.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+  log('Message sent');
 
   await wait(900);
 }
@@ -985,6 +996,7 @@ async function scrapeGroupContacts(groupName, options = {}) {
 
 async function sendSingleMessage({ srNo, phone, message, attachmentUrl, attachmentSendingEnabled = true }) {
   log('Processing row', srNo, phone);
+  log('Loop started');
   await openChatByPhone(phone);
 
   if (attachmentSendingEnabled && attachmentUrl) {
