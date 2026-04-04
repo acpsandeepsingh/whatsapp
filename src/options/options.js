@@ -1,4 +1,4 @@
-import { parseWorkbook, validatePhone } from '../services/xls-parser.js';
+import { parseWorkbook, readRowsFromWorkbook, validatePhone } from '../services/xls-parser.js';
 import { DEFAULT_SETTINGS } from '../services/settings.js';
 import { ACTIONS, createMessage, getAction } from '../shared/actions.js';
 
@@ -192,16 +192,7 @@ async function readWorkbookPreviewRows(file) {
   }
 
   const arrayBuffer = await file.arrayBuffer();
-  const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  const allRows = window.XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: '',
-    raw: true
-  });
-
-  return allRows;
+  return readRowsFromWorkbook(file, arrayBuffer);
 }
 
 function renderProgress(progress, latest = null) {
@@ -558,7 +549,7 @@ ui.importBtn.addEventListener('click', async () => {
   try {
     const file = ui.xlsInput.files?.[0];
     if (!file) {
-      setStatus('Select an XLS/XLSX file first.', true);
+      setStatus('Select an XLS/XLSX/CSV file first.', true);
       return;
     }
 

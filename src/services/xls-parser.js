@@ -16,7 +16,6 @@ function normalizeCell(value) {
   return String(value).trim();
 }
 
-
 function normalizeRowArray(row) {
   if (Array.isArray(row)) return row;
   if (!row || typeof row !== 'object') return [];
@@ -34,6 +33,93 @@ function normalizeHeader(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
+}
+
+function parseDelimitedLine(line, delimiter) {
+  const cells = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+
+    if (char === '"') {
+      const nextChar = line[index + 1];
+      if (inQuotes && nextChar === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === delimiter && !inQuotes) {
+      cells.push(current.trim());
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+
+  cells.push(current.trim());
+  return cells;
+}
+
+function chooseDelimiter(lines = []) {
+  const nonEmptyLine = lines.map((line) => String(line || '')).find((line) => line.trim() !== '') || '';
+  const delimiters = [',', '\t', ';', '|'];
+  const scored = delimiters.map((delimiter) => ({
+    delimiter,
+    score: (nonEmptyLine.match(new RegExp(`\\${delimiter === '\t' ? 't' : delimiter}`, 'g')) || []).length
+  }));
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.score > 0 ? scored[0].delimiter : ',';
+}
+
+function parsePlainTextRows(text) {
+  if (!text) return [];
+
+  const normalizedText = text.includes('\n')
+    ? text
+    : (text.includes('\\n') ? text.replace(/\\n/g, '\n') : text);
+
+  const rawLines = normalizedText
+    .split(/\r\n|\n|\r/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (!rawLines.length) return [];
+
+  const delimiter = chooseDelimiter(rawLines);
+  return rawLines.map((line) => parseDelimitedLine(line, delimiter));
+}
+
+export function readRowsFromWorkbook(file, arrayBuffer) {
+  if (!window.XLSX) {
+    throw new Error('SheetJS (XLSX) is not loaded.');
+  }
+
+  const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+
+  const workbookRows = window.XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    defval: '',
+    raw: true
+  });
+
+  if (workbookRows.length) return workbookRows;
+
+  const lowerName = String(file?.name || '').toLowerCase();
+  const isTextLike = /\.(csv|txt|tsv)$/.test(lowerName) || (file?.type || '').includes('text');
+  if (!isTextLike) return workbookRows;
+
+  const decodedText = new TextDecoder('utf-8').decode(arrayBuffer);
+  return parsePlainTextRows(decodedText);
 }
 
 function detectColumnIndexes(headerRow = []) {
@@ -187,15 +273,7 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
   }
 
   const arrayBuffer = await file.arrayBuffer();
-  const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-
-  const rows = window.XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: '',
-    raw: true
-  });
+  const rows = readRowsFromWorkbook(file, arrayBuffer);
 
   if (!rows.length) {
     return [];
@@ -219,8 +297,6 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
 
   let { rows: output, invalidRowCount } = parseRows(rows.slice(parseStartIndex), indexes, { headerDetected: false });
 
-  // Some sheets include a title row with words like "phone" which can be misdetected
-  // as a real header. If that happens and import result is empty, retry with inferred indexes.
   if (!output.length && rows.length > 1) {
     const fallbackIndexes = inferColumnIndexesFromData(rows.slice(1), indexes);
     const fallbackParsed = parseRows(rows.slice(parseStartIndex), fallbackIndexes, { headerDetected: false });
@@ -237,8 +313,6 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
     }
   }
 
-  // Some files include title/info rows before the real header row.
-  // If we still couldn't parse valid contacts, scan for a later header row and retry.
   if (!output.length && rows.length > 2) {
     const headerRowIndex = findLikelyHeaderRowIndex(rows.slice(1));
     if (headerRowIndex >= 0) {
@@ -263,7 +337,6 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
   }
 
   console.log('[WA CRM][XLS] Import summary:', {
-    sheetName,
     totalRows: rows.length,
     importedRows: output.length,
     invalidRows: invalidRowCount,
