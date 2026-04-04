@@ -139,8 +139,13 @@ function summarizeElementForLog(node) {
 }
 
 function setupWhatsAppInteractionDebugLogs() {
-  if (globalThis.__WA_CRM_CLICK_LOGGING_READY__) return;
+  const debugLogAttr = 'data-wa-crm-click-logging-ready';
+  if (globalThis.__WA_CRM_CLICK_LOGGING_READY__ || document.documentElement?.hasAttribute(debugLogAttr)) return;
   globalThis.__WA_CRM_CLICK_LOGGING_READY__ = true;
+  document.documentElement?.setAttribute(debugLogAttr, '1');
+
+  let lastClickSummary = '';
+  let lastClickTs = 0;
 
   document.addEventListener(
     'click',
@@ -163,6 +168,10 @@ function setupWhatsAppInteractionDebugLogs() {
 
       const clickable = preferredTarget || target?.closest('button, [role="button"], [role="option"], [data-testid], [title], [aria-label]');
       const summary = summarizeElementForLog((clickable instanceof Element ? clickable : null) || target);
+      const now = Date.now();
+      if (summary === lastClickSummary && now - lastClickTs < 400) return;
+      lastClickSummary = summary;
+      lastClickTs = now;
       log('[Debug][Click]', summary);
     },
     true
@@ -951,7 +960,6 @@ async function openChat(queryValue) {
     await wait(200);
     assertRunning('open-chat-click');
     simulateUserClick(clickableTarget);
-    if (typeof clickableTarget.click === 'function') clickableTarget.click();
     log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''));
 
     const switched = await confirmChatSwitched(query, 12000);
