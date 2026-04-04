@@ -862,34 +862,6 @@ async function openChat(queryValue) {
       (sidebarCells.length === 1 ? sidebarCells[0] : null);
 
     if (!matchedCell) {
-      const selectedCell = sidebarCells.find((cell) => {
-        if (!(cell instanceof HTMLElement)) return false;
-        const ariaSelected = (cell.getAttribute('aria-selected') || '').toLowerCase() === 'true';
-        if (ariaSelected) return true;
-        const selectedDescendant = cell.querySelector('[aria-selected="true"]');
-        return Boolean(selectedDescendant);
-      });
-
-      if (selectedCell) {
-        matchedCell = selectedCell;
-        log('[Search][Results][FallbackMatch]', {
-          query,
-          reason: 'using-aria-selected-row',
-          row: collectSidebarSearchDebugData([selectedCell])[0]
-        });
-      }
-    }
-
-    if (!matchedCell && sidebarCells.length) {
-      matchedCell = sidebarCells[0];
-      log('[Search][Results][FallbackMatch]', {
-        query,
-        reason: 'using-first-visible-row',
-        row: debugRows[0]
-      });
-    }
-
-    if (!matchedCell) {
       log('[Search][Results][NoMatch]', {
         query,
         normalizedQuery,
