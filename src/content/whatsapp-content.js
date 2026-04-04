@@ -99,6 +99,32 @@ SELECTORS.additionalFilterMenuItems = ['[role="menuitem"]', 'div[role="option"]'
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const RESUME_STORAGE_KEY = 'waContentResumeState';
 let isRunning = true;
+let typingLock = Promise.resolve();
+let automationActionQueue = Promise.resolve();
+
+async function withLock(lockName, callback) {
+  const previousLock = lockName === 'typing' ? typingLock : automationActionQueue;
+  let releaseLock = () => {};
+  const nextLock = new Promise((resolve) => {
+    releaseLock = resolve;
+  });
+
+  if (lockName === 'typing') typingLock = previousLock.then(() => nextLock);
+  else automationActionQueue = previousLock.then(() => nextLock);
+
+  await previousLock;
+  try {
+    return await callback();
+  } finally {
+    releaseLock();
+  }
+}
+
+async function waitForTypingLock(stage = 'automation-wait') {
+  assertRunning(stage);
+  await typingLock;
+  assertRunning(stage);
+}
 
 function randomBetween(min, max) {
   const safeMin = Number(min) || 0;
@@ -558,62 +584,64 @@ async function waitForSearchResults(timeoutMs = 10000) {
 }
 
 async function typeMessage(message, { delayPerChar = 45, confirmTimeoutMs = 15000 } = {}) {
-  assertRunning('message-start');
-  const text = String(message || '');
-  if (!text.trim()) throw new Error('Message is empty after template processing');
+  return withLock('typing', async () => {
+    assertRunning('message-start');
+    const text = String(message || '');
+    if (!text.trim()) throw new Error('Message is empty after template processing');
 
-  const box = await waitForElement(SELECTORS.messageBox, 15000);
-  if (!(box instanceof HTMLElement)) throw new Error('Message box is not editable.');
+    const box = await waitForElement(SELECTORS.messageBox, 15000);
+    if (!(box instanceof HTMLElement)) throw new Error('Message box is not editable.');
 
-  clearEditableBox(box);
-  box.focus();
-  log('[Message] Typing started:', `${text.length} chars`);
+    clearEditableBox(box);
+    box.focus();
+    log('[Message] Typing started:', `${text.length} chars`);
 
-  let typedChars = 0;
-  for (const char of text) {
-    assertRunning('message-typing');
-    const activeBox = getComposerBox();
-    if (!(activeBox instanceof HTMLElement)) throw new Error('Message box disappeared during typing.');
-    activeBox.focus();
-    activeBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
-    document.execCommand('insertText', false, char);
-    activeBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
-    activeBox.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-    typedChars += 1;
-    if (typedChars % 10 === 0) log('[Message] Typing progress', `${typedChars}/${text.length}`);
-    await wait(randomBetween(Math.max(30, delayPerChar), 80));
-  }
-
-  const started = Date.now();
-  while (Date.now() - started < confirmTimeoutMs) {
-    assertRunning('message-confirm');
-    const currentBox = getComposerBox();
-    if (!(currentBox instanceof HTMLElement)) {
-      await wait(120);
-      continue;
+    let typedChars = 0;
+    for (const char of text) {
+      assertRunning('message-typing');
+      const activeBox = getComposerBox();
+      if (!(activeBox instanceof HTMLElement)) throw new Error('Message box disappeared during typing.');
+      activeBox.focus();
+      activeBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+      document.execCommand('insertText', false, char);
+      activeBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+      activeBox.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+      typedChars += 1;
+      if (typedChars % 10 === 0) log('[Message] Typing progress', `${typedChars}/${text.length}`);
+      await wait(randomBetween(Math.max(30, delayPerChar), 80));
     }
 
-    const currentText = getEditableText(currentBox);
-    if (currentText === text) {
-      log('[Message] Typing completed and confirmed');
-      return currentBox;
-    }
-
-    if (text !== currentText) {
-      const missing = text.slice(currentText.length > 0 ? currentText.length : 0);
-      log('[Message] Retrying missing characters:', missing.length);
-      currentBox.focus();
-      for (const char of missing) {
-        assertRunning('message-retry-missing');
-        document.execCommand('insertText', false, char);
-        currentBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
-        await wait(randomBetween(30, 80));
+    const started = Date.now();
+    while (Date.now() - started < confirmTimeoutMs) {
+      assertRunning('message-confirm');
+      const currentBox = getComposerBox();
+      if (!(currentBox instanceof HTMLElement)) {
+        await wait(120);
+        continue;
       }
-    }
-    await wait(120);
-  }
 
-  throw new Error('Message confirmation failed before send.');
+      const currentText = getEditableText(currentBox);
+      if (currentText === text) {
+        log('[Message] Typing completed and confirmed');
+        return currentBox;
+      }
+
+      if (text !== currentText) {
+        const missing = text.slice(currentText.length > 0 ? currentText.length : 0);
+        log('[Message] Retrying missing characters:', missing.length);
+        currentBox.focus();
+        for (const char of missing) {
+          assertRunning('message-retry-missing');
+          document.execCommand('insertText', false, char);
+          currentBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+          await wait(randomBetween(30, 80));
+        }
+      }
+      await wait(120);
+    }
+
+    throw new Error('Message confirmation failed before send.');
+  });
 }
 
 async function waitForElement(selectors, timeoutMs = 25000, pollMs = 250, root = document) {
@@ -1128,6 +1156,7 @@ async function clickChatRow(node) {
 
 async function openChat(queryValue) {
   assertRunning('open-chat-start');
+  await waitForTypingLock('open-chat-wait-typing');
   const query = String(queryValue || '').trim();
   if (!query) throw new Error('Missing contact/group search query.');
 
@@ -1828,19 +1857,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.OPEN_CHAT: {
-        await openChatBySearch(message.query || message.phone || '');
+        await withLock('automation', async () => {
+          await waitForTypingLock('open-chat-action-wait');
+          await openChatBySearch(message.query || message.phone || '');
+        });
         sendResponse({ success: true });
         break;
       }
       case ACTIONS.SEND_MESSAGE: {
-        const result = await sendSingleMessage(message.data || {});
+        const result = await withLock('automation', async () => sendSingleMessage(message.data || {}));
         sendResponse(result);
         break;
       }
       case ACTIONS.START_CAMPAIGN_FROM_STORAGE: {
-        isRunning = true;
-        await chrome.storage.local.set({ isRunning: true });
-        const result = await runSendLoop(message.rows || message.data || []);
+        const result = await withLock('automation', async () => {
+          isRunning = true;
+          await chrome.storage.local.set({ isRunning: true });
+          return runSendLoop(message.rows || message.data || []);
+        });
         sendResponse(result);
         break;
       }
