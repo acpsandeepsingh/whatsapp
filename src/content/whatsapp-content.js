@@ -45,7 +45,7 @@ const SELECTORS = {
   appReady: ['#app'],
   paneSide: ['#pane-side'],
   chatSearchInputs: [
-    'input[aria-label="Search or start a new chat"]',
+    'input[role="textbox"]',
     '[data-testid="chat-list-search"] [contenteditable="true"]',
     '[data-testid="chat-list-search"] [role="textbox"]',
     '[aria-label="Search input textbox"][contenteditable="true"]',
@@ -54,7 +54,9 @@ const SELECTORS = {
     'div[role="search"] [contenteditable="true"]'
   ],
   sidebarChatRows: [
-    '#pane-side [role="listitem"]',
+    '#pane-side [role="grid"] [role="row"] [role="gridcell"]',
+    '#pane-side [role="gridcell"]',
+    '#pane-side [role="row"] [role="gridcell"]',
     '#pane-side div[data-testid="cell-frame-container"]',
     '#pane-side > div > div > div > div'
   ],
@@ -83,7 +85,7 @@ const SELECTORS = {
     'div[data-testid="group-participants"]',
     'div[role="dialog"] [tabindex="-1"]'
   ],
-  participantRows: ['[aria-label*="Participants"] [role="listitem"]', 'div[data-testid="group-participants"] [role="listitem"]', '[role="listitem"]'],
+  participantRows: ['[aria-label*="Participants"] [role="row"]', 'div[data-testid="group-participants"] [role="row"]', '[role="row"]'],
   closePanelButtons: ['button[aria-label="Back"]', 'span[data-icon="back"]', 'button[title="Back"]']
 };
 SELECTORS.filterTabs = {
@@ -330,7 +332,7 @@ async function typeSearch(query) {
   const value = String(query || '').trim();
   if (!value) throw new Error('Missing contact/group search query.');
 
-  const searchBox = await waitForElement(SELECTORS.chatSearchInputs, 12000);
+  const searchBox = (await waitForElement('input[role="textbox"]', 12000)) || (await waitForElement(SELECTORS.chatSearchInputs, 12000));
   if (!searchBox) throw new Error('Search box not found in WhatsApp sidebar.');
 
   log('[Search] Typing started:', value);
@@ -367,9 +369,12 @@ async function waitForSearchResults(timeoutMs = 10000) {
   while (Date.now() - started < timeoutMs) {
     assertRunning('search-results');
     const paneSide = queryWithFallback(SELECTORS.paneSide);
-    const rows = queryAllWithFallback(['#pane-side div[role="listitem"]'], paneSide || document).filter((row) => row?.textContent?.trim());
+    const rows = queryAllWithFallback(
+      ['#pane-side [role="gridcell"]', '#pane-side [role="grid"] [role="row"] [role="gridcell"]'],
+      paneSide || document
+    ).filter((row) => row?.textContent?.trim());
     if (rows.length) {
-      log('[Search] Results available:', rows.length);
+      log('[Search] Gridcell found:', rows.length);
       return rows;
     }
     await wait(150);
@@ -769,16 +774,15 @@ async function openChat(queryValue) {
     assertRunning('open-chat-attempt');
     log(`[Chat] Attempt ${attempt} for ${query}`);
     await typeSearch(query);
-    const rows = await waitForSearchResults(10000);
-    const targetRow = rows[0];
-    if (!(targetRow instanceof HTMLElement)) throw new Error('No sidebar chat item found');
-    const clickableTarget =
-      targetRow.querySelector('a[href], [role="button"], [tabindex], span[title], div[title]') || targetRow;
+    await waitForSearchResults(10000);
+    const chat = document.querySelector('#pane-side [role="gridcell"]');
+    if (!(chat instanceof HTMLElement)) throw new Error('No sidebar chat item found');
+    const clickableTarget = chat.querySelector('div') || chat;
     clickableTarget.scrollIntoView({ block: 'center', behavior: 'instant' });
     await wait(200);
     assertRunning('open-chat-click');
     simulateUserClick(clickableTarget);
-    log('[Chat] Clicked first search result');
+    log('[Chat] Chat clicked');
 
     const switched = await confirmChatSwitched(query, 12000);
     if (switched) {
@@ -799,7 +803,7 @@ async function confirmChatSwitched(expectedContact, timeoutMs = 12000) {
     const header = queryWithFallback(['header span[title]', ...SELECTORS.chatHeaderTitle]);
     const title = cleanText(header?.getAttribute?.('title') || header?.textContent || '').toLowerCase();
     if (title && (title.includes(expected) || expected.includes(title))) {
-      log('[Chat] Chat confirmed switched:', title);
+      log('[Chat] Chat switched:', title);
       return true;
     }
     await wait(150);
@@ -835,7 +839,10 @@ async function setMessageAndSend(text) {
 
   await typeMessage(message);
   await wait(200);
-  assertRunning('send-protection');
+  if (!isRunning) {
+    log('[Message] Send skipped (STOP triggered)');
+    assertRunning('send-protection');
+  }
   const latestBox = queryWithFallback(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox]);
   const latestText = getEditableText(latestBox);
   if (latestText !== message) throw new Error('Send blocked because message text is not fully typed.');
@@ -952,7 +959,7 @@ async function resolvePhoneFromMemberRow(row) {
   (row.closest('[role="button"]') || row).click();
   await wait(350);
 
-  const infoEntry = [...document.querySelectorAll('[role="button"], [role="listitem"], li, div')]
+  const infoEntry = [...document.querySelectorAll('[role="button"], [role="row"], [role="gridcell"], li, div')]
     .find((node) => /contact info/i.test((node.textContent || '').trim()));
 
   if (!infoEntry) {
@@ -978,7 +985,7 @@ async function resolvePhoneFromOpenChatProfile() {
   (header.closest('button') || header).click();
   await wait(450);
 
-  const infoEntry = [...document.querySelectorAll('[role="button"], [role="listitem"], li, div')]
+  const infoEntry = [...document.querySelectorAll('[role="button"], [role="row"], [role="gridcell"], li, div')]
     .find((node) => /contact info/i.test((node.textContent || '').trim()));
 
   if (infoEntry) {
@@ -1060,7 +1067,7 @@ function getWaPopoverBucketDialog() {
   const dialogs = [...popoverBucket.querySelectorAll('[data-animate-modal-popup="true"], [role="dialog"]')];
   return (
     dialogs.find((dialog) => {
-      const hasMemberRows = Boolean(dialog.querySelector('[role="listitem"]'));
+      const hasMemberRows = Boolean(dialog.querySelector('[role="row"], [role="gridcell"]'));
       const hasSearchInput = Boolean(dialog.querySelector('input[aria-label="Search contacts"], input[placeholder="Search contacts"]'));
       return hasMemberRows || hasSearchInput;
     }) || null
@@ -1093,7 +1100,8 @@ async function ensureMembersPopupOpen(root = document) {
 
 function collectVisibleMembersFromPanel(panel, discovered) {
   const candidates = [
-    ...panel.querySelectorAll('[role="listitem"]'),
+    ...panel.querySelectorAll('[role="row"]'),
+    ...panel.querySelectorAll('[role="gridcell"]'),
     ...panel.querySelectorAll('div[tabindex="-1"]'),
     ...panel.querySelectorAll('div[tabindex="0"]')
   ];
