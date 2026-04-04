@@ -338,6 +338,14 @@ function scoreChatSearchMatch(query, normalizedQuery, normalizedQueryLower, rela
   return score;
 }
 
+function extractLikelyChatTitleFromRowText(rowText) {
+  const text = cleanText(rowText);
+  if (!text) return '';
+  const withoutYou = text.replace(/\(\s*you\s*\)/gi, '').trim();
+  const beforeTime = withoutYou.split(/\b\d{1,2}:\d{2}\s*(?:am|pm)?\b/i)[0] || withoutYou;
+  return cleanText(beforeTime.split(/\s{2,}/)[0] || beforeTime);
+}
+
 function isLikelyNonChatSidebarRow(cell, precomputedText = '') {
   if (!(cell instanceof HTMLElement)) return true;
   const text = cleanText(precomputedText || getChatRowSearchText(cell)).toLowerCase();
@@ -1003,6 +1011,13 @@ function getSidebarSearchCandidates() {
 function resolveChatClickableTarget(cell) {
   if (!(cell instanceof HTMLElement)) return null;
 
+  const exactGridCell =
+    cell.matches?.('div[role="gridcell"][aria-colindex="2"]._ak8o')
+      ? cell
+      : cell.querySelector?.('div[role="gridcell"][aria-colindex="2"]._ak8o') ||
+        cell.closest?.('div[role="gridcell"][aria-colindex="2"]._ak8o');
+  if (exactGridCell instanceof HTMLElement) return exactGridCell;
+
   const baseGridCell =
     cell.closest('[role="gridcell"]') ||
     (cell.getAttribute('role') === 'gridcell' ? cell : null) ||
@@ -1155,9 +1170,10 @@ async function openChat(queryValue) {
           assertRunning('open-chat-click-fallback');
           const clickableTarget = resolveChatClickableTarget(fallbackCell) || fallbackCell;
           const clickResult = await clickChatRow(clickableTarget);
+          const fallbackRowText = getChatRowSearchText(fallbackCell);
           log('[Chat] Fallback chat clicked:', cleanText(fallbackCell.innerText || ''), 'clickResult=', clickResult);
-          let switched = await confirmChatSwitched(variant.value, 3200);
-          if (!switched) switched = await confirmChatSwitched(query, 9500);
+          let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: fallbackRowText });
+          if (!switched) switched = await confirmChatSwitched(query, 9500, { clickedRowText: fallbackRowText });
           if (switched) {
             const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
             if (messageBox) return messageBox;
@@ -1187,9 +1203,10 @@ async function openChat(queryValue) {
       assertRunning('open-chat-click');
       const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
       const clickResult = await clickChatRow(clickableTarget);
+      const matchedRowText = getChatRowSearchText(matchedCell);
       log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''), 'clickResult=', clickResult);
 
-      let switched = await confirmChatSwitched(variant.value, 3200);
+      let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: matchedRowText });
       if (!switched) {
         log('[Chat] Primary click not confirmed, retrying click + enter fallback');
         await clickChatRow(clickableTarget);
@@ -1199,7 +1216,7 @@ async function openChat(queryValue) {
           active.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
         }
       }
-      switched = switched || (await confirmChatSwitched(variant.value, 9500));
+      switched = switched || (await confirmChatSwitched(variant.value, 9500, { clickedRowText: matchedRowText }));
       if (switched) {
         const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
         if (messageBox) return messageBox;
@@ -1212,9 +1229,10 @@ async function openChat(queryValue) {
   throw new Error(`Unable to open chat for query: ${query}`);
 }
 
-async function confirmChatSwitched(expectedContact, timeoutMs = 12000) {
+async function confirmChatSwitched(expectedContact, timeoutMs = 12000, context = {}) {
   const expected = String(expectedContact || '').trim().toLowerCase();
   const expectedPhone = normalizePhone(expectedContact);
+  const clickedRowTitle = extractLikelyChatTitleFromRowText(context.clickedRowText || '').toLowerCase();
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     assertRunning('chat-confirm');
@@ -1224,6 +1242,10 @@ async function confirmChatSwitched(expectedContact, timeoutMs = 12000) {
     const titlePhone = normalizePhone(rawTitle);
     if (title && (title.includes(expected) || expected.includes(title) || (expectedPhone && titlePhone && (titlePhone.includes(expectedPhone) || expectedPhone.includes(titlePhone))))) {
       log('[Chat] Chat switched:', title || rawTitle);
+      return true;
+    }
+    if (clickedRowTitle && title && (title.includes(clickedRowTitle) || clickedRowTitle.includes(title))) {
+      log('[Chat] Chat switched (clicked-row title match):', { title: rawTitle, clickedRowTitle });
       return true;
     }
     await wait(150);
