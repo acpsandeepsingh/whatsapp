@@ -763,12 +763,33 @@ function filterChats(snapshot = {}, filter = {}) {
   return chats;
 }
 
+function getChatRowSearchText(cell) {
+  if (!(cell instanceof HTMLElement)) return '';
+
+  const parts = [
+    cell.innerText || cell.textContent || '',
+    cell.getAttribute('title') || '',
+    cell.getAttribute('aria-label') || '',
+    cell.getAttribute('data-testid') || ''
+  ];
+  const namedNodes = cell.querySelectorAll('[title], [aria-label]');
+  namedNodes.forEach((node) => {
+    if (!(node instanceof HTMLElement)) return;
+    parts.push(node.getAttribute('title') || '');
+    parts.push(node.getAttribute('aria-label') || '');
+    parts.push(node.textContent || '');
+  });
+
+  return cleanText(parts.filter(Boolean).join(' '));
+}
+
 async function openChat(queryValue) {
   assertRunning('open-chat-start');
   const query = String(queryValue || '').trim();
   if (!query) throw new Error('Missing contact/group search query.');
   const normalizedQuery = normalizePhone(query);
   const normalizedQueryLower = query.toLowerCase();
+  const relaxedQuery = normalizedQueryLower.replace(/[^a-z0-9]+/g, '');
 
   log('[Chat] Opening chat:', query);
   await ensureWhatsAppReady();
@@ -789,14 +810,17 @@ async function openChat(queryValue) {
 
     const matchedCell =
       sidebarCells.find((cell) => {
-        const cellText = cleanText(cell.innerText || cell.textContent || '');
+        const cellText = getChatRowSearchText(cell);
         if (!cellText) return false;
         const cellTextLower = cellText.toLowerCase();
         if (cellTextLower.includes(normalizedQueryLower) || normalizedQueryLower.includes(cellTextLower)) return true;
+        const relaxedCellText = cellTextLower.replace(/[^a-z0-9]+/g, '');
+        if (relaxedQuery && relaxedCellText && (relaxedCellText.includes(relaxedQuery) || relaxedQuery.includes(relaxedCellText))) return true;
         if (!normalizedQuery) return false;
         const normalizedCellText = normalizePhone(cellText);
         return Boolean(normalizedCellText && (normalizedCellText.includes(normalizedQuery) || normalizedQuery.includes(normalizedCellText)));
-      }) || null;
+      }) ||
+      (sidebarCells.length === 1 ? sidebarCells[0] : null);
 
     if (!matchedCell) throw new Error(`No matching visible chat found for query: ${query}`);
 
