@@ -146,8 +146,23 @@ function setupWhatsAppInteractionDebugLogs() {
     'click',
     (event) => {
       const target = event.target instanceof Element ? event.target : null;
-      const clickable = target?.closest('button, [role="button"], [role="option"], [data-testid], [title], [aria-label]');
-      const summary = summarizeElementForLog(clickable || target);
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+      const pathElements = path.filter((item) => item instanceof Element);
+      const paneSideNode = pathElements.find((item) => item instanceof Element && item.id === 'pane-side');
+
+      let preferredTarget =
+        pathElements.find((item) =>
+          item instanceof Element &&
+          item.matches?.('#pane-side [role="row"] [role="gridcell"], #pane-side [role="gridcell"][tabindex], #pane-side [data-testid="cell-frame-container"]')
+        ) ||
+        target?.closest('#pane-side [role="row"] [role="gridcell"], #pane-side [role="gridcell"][tabindex], #pane-side [data-testid="cell-frame-container"]');
+
+      if (!(preferredTarget instanceof Element) && paneSideNode) {
+        preferredTarget = target?.closest('#pane-side [role="row"], #pane-side [role="gridcell"], #pane-side [role="grid"]') || null;
+      }
+
+      const clickable = preferredTarget || target?.closest('button, [role="button"], [role="option"], [data-testid], [title], [aria-label]');
+      const summary = summarizeElementForLog((clickable instanceof Element ? clickable : null) || target);
       log('[Debug][Click]', summary);
     },
     true
@@ -813,6 +828,37 @@ function collectSidebarSearchDebugData(sidebarCells = []) {
   });
 }
 
+function resolveChatClickableTarget(cell) {
+  if (!(cell instanceof HTMLElement)) return null;
+
+  const baseGridCell =
+    cell.closest('[role="gridcell"]') ||
+    (cell.getAttribute('role') === 'gridcell' ? cell : null) ||
+    cell;
+  if (!(baseGridCell instanceof HTMLElement)) return null;
+
+  const row = baseGridCell.closest('[role="row"]');
+  const candidateRoots = [row, baseGridCell].filter((node) => node instanceof HTMLElement);
+  const targetSelectors = [
+    ':scope > [role="gridcell"][tabindex]',
+    '[role="gridcell"][tabindex]',
+    '[data-testid="cell-frame-container"]',
+    'div[aria-selected]',
+    'div[tabindex="-1"]',
+    'div[tabindex="0"]',
+    '[role="button"]'
+  ];
+
+  for (const root of candidateRoots) {
+    for (const selector of targetSelectors) {
+      const candidate = root.querySelector(selector);
+      if (candidate instanceof HTMLElement && candidate.getAttribute('role') !== 'grid') return candidate;
+    }
+  }
+
+  return baseGridCell.getAttribute('role') === 'grid' ? row || baseGridCell : baseGridCell;
+}
+
 async function openChat(queryValue) {
   assertRunning('open-chat-start');
   const query = String(queryValue || '').trim();
@@ -872,14 +918,12 @@ async function openChat(queryValue) {
       throw new Error(`No matching visible chat found for query: ${query}`);
     }
 
-    const clickableTarget =
-      matchedCell.querySelector(
-        '[data-testid="cell-frame-container"], [role="button"], [tabindex], button, a, div[aria-selected], div[aria-label], div[title]'
-      ) || matchedCell;
+    const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
     clickableTarget.scrollIntoView({ block: 'center', behavior: 'instant' });
     await wait(200);
     assertRunning('open-chat-click');
     simulateUserClick(clickableTarget);
+    if (typeof clickableTarget.click === 'function') clickableTarget.click();
     log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''));
 
     const switched = await confirmChatSwitched(query, 12000);
