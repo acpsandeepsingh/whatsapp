@@ -1011,6 +1011,13 @@ function getSidebarSearchCandidates() {
 function resolveChatClickableTarget(cell) {
   if (!(cell instanceof HTMLElement)) return null;
 
+  const exactGridCell =
+    cell.matches?.('div[role="gridcell"][aria-colindex="2"]._ak8o')
+      ? cell
+      : cell.querySelector?.('div[role="gridcell"][aria-colindex="2"]._ak8o') ||
+        cell.closest?.('div[role="gridcell"][aria-colindex="2"]._ak8o');
+  if (exactGridCell instanceof HTMLElement) return exactGridCell;
+
   const baseGridCell =
     cell.closest('[role="gridcell"]') ||
     (cell.getAttribute('role') === 'gridcell' ? cell : null) ||
