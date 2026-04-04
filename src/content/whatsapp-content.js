@@ -307,20 +307,104 @@ function clearEditableBox(box) {
   box.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
 }
 
-async function typeMessage(box, message, { minDelay = 50, maxDelay = 150 } = {}) {
-  if (!(box instanceof HTMLElement)) throw new Error('Message box is not editable.');
+function getEditableText(box) {
+  return String(box?.innerText || '').replace(/\r/g, '');
+}
+
+async function typeSearch(query) {
+  const value = String(query || '').trim();
+  if (!value) throw new Error('Missing contact/group search query.');
+
+  const searchBox = await waitForElement(SELECTORS.chatSearchInputs, 12000);
+  if (!searchBox) throw new Error('Search box not found in WhatsApp sidebar.');
+
+  log('[Search] Typing started:', value);
+  if (searchBox instanceof HTMLInputElement) {
+    searchBox.focus();
+    searchBox.select();
+    searchBox.value = '';
+    searchBox.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    for (const char of value) {
+      searchBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+      searchBox.value += char;
+      searchBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+      searchBox.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+      await wait(100);
+    }
+  } else {
+    clearEditableBox(searchBox);
+    searchBox.focus();
+    for (const char of value) {
+      searchBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+      document.execCommand('insertText', false, char);
+      searchBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+      searchBox.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+      await wait(100);
+    }
+  }
+  log('[Search] Typing completed:', value);
+}
+
+async function waitForSearchResults(timeoutMs = 10000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const rows = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((row) => row?.textContent?.trim());
+    if (rows.length) {
+      log('[Search] Results available:', rows.length);
+      return rows;
+    }
+    await wait(150);
+  }
+  throw new Error('No sidebar chat item found');
+}
+
+async function typeMessage(message, { delayPerChar = 100, confirmTimeoutMs = 15000 } = {}) {
   const text = String(message || '');
   if (!text.trim()) throw new Error('Message is empty after template processing');
 
+  const box = await waitForElement(SELECTORS.messageBox, 15000);
+  if (!(box instanceof HTMLElement)) throw new Error('Message box is not editable.');
+
   clearEditableBox(box);
   box.focus();
+  log('[Message] Typing started:', `${text.length} chars`);
+
   for (const char of text) {
     box.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
-    box.textContent = `${box.textContent || ''}${char}`;
+    document.execCommand('insertText', false, char);
     box.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
     box.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-    await wait(randomBetween(minDelay, maxDelay));
+    await wait(delayPerChar);
   }
+
+  const started = Date.now();
+  while (Date.now() - started < confirmTimeoutMs) {
+    const currentBox = queryWithFallback(SELECTORS.messageBox);
+    if (!(currentBox instanceof HTMLElement)) {
+      await wait(120);
+      continue;
+    }
+
+    const currentText = getEditableText(currentBox);
+    if (currentText === text) {
+      log('[Message] Confirmation success');
+      return currentBox;
+    }
+
+    if (text.startsWith(currentText)) {
+      const missing = text.slice(currentText.length);
+      log('[Message] Retrying missing characters:', missing.length);
+      currentBox.focus();
+      for (const char of missing) {
+        document.execCommand('insertText', false, char);
+        currentBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+        await wait(delayPerChar);
+      }
+    }
+    await wait(120);
+  }
+
+  throw new Error('Message confirmation failed before send.');
 }
 
 async function waitForElement(selectors, timeoutMs = 25000, pollMs = 250, root = document) {
@@ -644,73 +728,58 @@ function filterChats(snapshot = {}, filter = {}) {
   return chats;
 }
 
-async function openChatBySearch(queryValue) {
+async function openChat(queryValue) {
   const query = String(queryValue || '').trim();
   if (!query) throw new Error('Missing contact/group search query.');
 
-  log(`Opening chat: ${query}`);
+  log('[Chat] Opening chat:', query);
   await ensureWhatsAppReady();
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const searchBox = await waitForElement(SELECTORS.chatSearchInputs, 12000);
-    if (!searchBox) throw new Error('Search box not found in WhatsApp sidebar.');
-
-    if (searchBox instanceof HTMLInputElement) {
-      await humanTypeIntoInput(searchBox, query);
-    } else {
-      clearEditableBox(searchBox);
-      await typeMessage(searchBox, query);
-    }
-
-    const firstChat = await waitForElement(SELECTORS.sidebarChatRows, 8000);
-    if (!firstChat) {
-      if (attempt >= 3) throw new Error(`No sidebar chat item found for: ${query}`);
-      await wait(500);
-      continue;
-    }
-
-    simulateUserClick(firstChat);
-    await wait(800);
+    log(`[Chat] Attempt ${attempt} for ${query}`);
+    await typeSearch(query);
+    const rows = await waitForSearchResults(10000);
+    const targetRow = rows[0];
+    if (!(targetRow instanceof HTMLElement)) throw new Error('No sidebar chat item found');
+    targetRow.scrollIntoView({ block: 'center', behavior: 'instant' });
+    await wait(200);
+    simulateUserClick(targetRow);
+    log('[Chat] Clicked first search result');
 
     const messageBox = await waitForElement(SELECTORS.messageBox, 16000);
-    if (messageBox) {
-      const latestSearchBox = queryWithFallback(SELECTORS.chatSearchInputs);
-      if (latestSearchBox instanceof HTMLInputElement) {
-        latestSearchBox.value = '';
-        latestSearchBox.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-      } else if (latestSearchBox) {
-        clearEditableBox(latestSearchBox);
-      }
-      return messageBox;
-    }
+    if (messageBox) return messageBox;
+    if (attempt < 3) await wait(800);
   }
 
   throw new Error(`Unable to open chat for query: ${query}`);
 }
 
+async function openChatBySearch(queryValue) {
+  return openChat(queryValue);
+}
+
 async function openChatByPhone(phone) {
   const normalized = normalizePhone(phone);
   if (!normalized) throw new Error('Invalid phone number');
-  return openChatBySearch(normalized);
+  return openChat(normalized);
+}
+
+async function sendMessageSafe() {
+  const box = queryWithFallback(SELECTORS.messageBox);
+  if (!(box instanceof HTMLElement)) throw new Error('Message box not found');
+  await wait(200);
+  box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+  box.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+  log('[Message] Send action fired');
+  await wait(900);
 }
 
 async function setMessageAndSend(text) {
   const message = String(text || '').trim();
   if (!message) throw new Error('Message is empty after template processing');
 
-  const box = await waitForElement(SELECTORS.messageBox, 15000);
-  if (!box) throw new Error('Message box not found');
-
-  await typeMessage(box, message);
-  const currentText = cleanText(box.textContent || '');
-  if (!currentText) throw new Error('Message typing failed, refusing to send empty message.');
-  log('Message inserted');
-  await wait(randomBetween(120, 300));
-
-  box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-  box.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-  log('Message sent');
-
-  await wait(900);
+  await typeMessage(message);
+  await wait(200);
+  await sendMessageSafe();
 }
 
 function simulateUserClick(node) {
@@ -1093,10 +1162,10 @@ async function setResumeState(nextState) {
 async function runSendLoop(rows = []) {
   const queue = Array.isArray(rows) ? rows : [];
   const initialState = await getResumeState();
-  let index = Number(initialState.currentIndex) || 0;
+  const startIndex = Number(initialState.currentIndex) || 0;
 
-  while (index < queue.length) {
-    const row = queue[index];
+  for (const [offset, row] of queue.slice(startIndex).entries()) {
+    const index = startIndex + offset;
     let success = false;
 
     for (let retry = 0; retry <= 2; retry += 1) {
@@ -1115,9 +1184,8 @@ async function runSendLoop(rows = []) {
       return { success: false, index, error: `Failed after retries at index ${index}` };
     }
 
-    index += 1;
-    await setResumeState({ currentIndex: index, updatedAt: Date.now() });
-    if (index < queue.length) {
+    await setResumeState({ currentIndex: index + 1, updatedAt: Date.now() });
+    if (index + 1 < queue.length) {
       await wait(randomBetween(2000, 5000));
     }
   }
