@@ -847,7 +847,7 @@ async function openChat(queryValue) {
       rows: debugRows
     });
 
-    const matchedCell =
+    let matchedCell =
       sidebarCells.find((cell) => {
         const cellText = getChatRowSearchText(cell);
         if (!cellText) return false;
