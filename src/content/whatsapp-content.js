@@ -139,15 +139,39 @@ function summarizeElementForLog(node) {
 }
 
 function setupWhatsAppInteractionDebugLogs() {
-  if (globalThis.__WA_CRM_CLICK_LOGGING_READY__) return;
+  const debugLogAttr = 'data-wa-crm-click-logging-ready';
+  if (globalThis.__WA_CRM_CLICK_LOGGING_READY__ || document.documentElement?.hasAttribute(debugLogAttr)) return;
   globalThis.__WA_CRM_CLICK_LOGGING_READY__ = true;
+  document.documentElement?.setAttribute(debugLogAttr, '1');
 
   document.addEventListener(
     'click',
     (event) => {
       const target = event.target instanceof Element ? event.target : null;
-      const clickable = target?.closest('button, [role="button"], [role="option"], [data-testid], [title], [aria-label]');
-      const summary = summarizeElementForLog(clickable || target);
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+      const pathElements = path.filter((item) => item instanceof Element);
+      const paneSideNode = pathElements.find((item) => item instanceof Element && item.id === 'pane-side');
+
+      let preferredTarget =
+        pathElements.find((item) =>
+          item instanceof Element &&
+          item.matches?.('#pane-side [role="row"] [role="gridcell"], #pane-side [role="gridcell"][tabindex], #pane-side [data-testid="cell-frame-container"]')
+        ) ||
+        target?.closest('#pane-side [role="row"] [role="gridcell"], #pane-side [role="gridcell"][tabindex], #pane-side [data-testid="cell-frame-container"]');
+
+      if (!(preferredTarget instanceof Element) && paneSideNode) {
+        preferredTarget = target?.closest('#pane-side [role="row"], #pane-side [role="gridcell"], #pane-side [role="grid"]') || null;
+      }
+
+      const clickable = preferredTarget || target?.closest('button, [role="button"], [role="option"], [data-testid], [title], [aria-label]');
+      const summary = summarizeElementForLog((clickable instanceof Element ? clickable : null) || target);
+      const now = Date.now();
+      const lastSummary = document.documentElement?.getAttribute('data-wa-crm-last-click-summary') || '';
+      const lastTsRaw = document.documentElement?.getAttribute('data-wa-crm-last-click-ts') || '0';
+      const lastTs = Number(lastTsRaw) || 0;
+      if (summary === lastSummary && now - lastTs < 400) return;
+      document.documentElement?.setAttribute('data-wa-crm-last-click-summary', summary);
+      document.documentElement?.setAttribute('data-wa-crm-last-click-ts', String(now));
       log('[Debug][Click]', summary);
     },
     true
@@ -228,6 +252,38 @@ function extractPhoneFromText(value) {
 
 function cleanText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function isLikelyPhoneQuery(value) {
+  return normalizePhone(value).length >= 7;
+}
+
+function isPhoneMatch(queryText, rowText) {
+  const queryPhone = normalizePhone(queryText);
+  const rowPhone = normalizePhone(rowText);
+  if (!queryPhone || !rowPhone) return false;
+  if (rowPhone.includes(queryPhone) || queryPhone.includes(rowPhone)) return true;
+  const minSuffixLength = Math.min(Math.max(7, queryPhone.length - 2), queryPhone.length, rowPhone.length);
+  if (minSuffixLength < 7) return false;
+  return rowPhone.slice(-minSuffixLength) === queryPhone.slice(-minSuffixLength);
+}
+
+function scoreChatSearchMatch(query, normalizedQuery, normalizedQueryLower, relaxedQuery, rowText) {
+  const text = cleanText(rowText);
+  if (!text) return -1;
+  const textLower = text.toLowerCase();
+  const relaxedText = textLower.replace(/[^a-z0-9]+/g, '');
+  const textPhone = normalizePhone(text);
+  let score = -1;
+
+  if (textLower === normalizedQueryLower) score = Math.max(score, 100);
+  if (textLower.includes(normalizedQueryLower) || normalizedQueryLower.includes(textLower)) score = Math.max(score, 80);
+  if (relaxedQuery && relaxedText && (relaxedText.includes(relaxedQuery) || relaxedQuery.includes(relaxedText))) score = Math.max(score, 60);
+  if (normalizedQuery && textPhone && (textPhone.includes(normalizedQuery) || normalizedQuery.includes(textPhone))) score = Math.max(score, 50);
+  if (isPhoneMatch(query, text) || isPhoneMatch(normalizedQuery, text)) score = Math.max(score, 90);
+  if (isLikelyPhoneQuery(query) && textPhone.endsWith(normalizedQuery)) score = Math.max(score, 95);
+
+  return score;
 }
 
 function hasMemberLikeText(value) {
@@ -823,8 +879,10 @@ function resolveChatClickableTarget(cell) {
   if (!(baseGridCell instanceof HTMLElement)) return null;
 
   const row = baseGridCell.closest('[role="row"]');
-  const candidateRoots = [baseGridCell, row].filter((node) => node instanceof HTMLElement);
+  const candidateRoots = [row, baseGridCell].filter((node) => node instanceof HTMLElement);
   const targetSelectors = [
+    ':scope > [role="gridcell"][tabindex]',
+    '[role="gridcell"][tabindex]',
     '[data-testid="cell-frame-container"]',
     'div[aria-selected]',
     'div[tabindex="-1"]',
@@ -835,11 +893,11 @@ function resolveChatClickableTarget(cell) {
   for (const root of candidateRoots) {
     for (const selector of targetSelectors) {
       const candidate = root.querySelector(selector);
-      if (candidate instanceof HTMLElement) return candidate;
+      if (candidate instanceof HTMLElement && candidate.getAttribute('role') !== 'grid') return candidate;
     }
   }
 
-  return baseGridCell;
+  return baseGridCell.getAttribute('role') === 'grid' ? row || baseGridCell : baseGridCell;
 }
 
 async function openChat(queryValue) {
@@ -876,19 +934,11 @@ async function openChat(queryValue) {
       rows: debugRows
     });
 
-    let matchedCell =
-      sidebarCells.find((cell) => {
-        const cellText = getChatRowSearchText(cell);
-        if (!cellText) return false;
-        const cellTextLower = cellText.toLowerCase();
-        if (cellTextLower.includes(normalizedQueryLower) || normalizedQueryLower.includes(cellTextLower)) return true;
-        const relaxedCellText = cellTextLower.replace(/[^a-z0-9]+/g, '');
-        if (relaxedQuery && relaxedCellText && (relaxedCellText.includes(relaxedQuery) || relaxedQuery.includes(relaxedCellText))) return true;
-        if (!normalizedQuery) return false;
-        const normalizedCellText = normalizePhone(cellText);
-        return Boolean(normalizedCellText && (normalizedCellText.includes(normalizedQuery) || normalizedQuery.includes(normalizedCellText)));
-      }) ||
-      (sidebarCells.length === 1 ? sidebarCells[0] : null);
+    const scoredMatches = sidebarCells
+      .map((cell) => ({ cell, score: scoreChatSearchMatch(query, normalizedQuery, normalizedQueryLower, relaxedQuery, getChatRowSearchText(cell)) }))
+      .filter((entry) => entry.score >= 0)
+      .sort((a, b) => b.score - a.score);
+    const matchedCell = scoredMatches[0]?.cell || (sidebarCells.length === 1 ? sidebarCells[0] : null);
 
     if (!matchedCell) {
       log('[Search][Results][NoMatch]', {
@@ -896,6 +946,10 @@ async function openChat(queryValue) {
         normalizedQuery,
         queryLower: normalizedQueryLower,
         relaxedQuery,
+        candidateScores: sidebarCells.map((cell) => ({
+          text: getChatRowSearchText(cell),
+          score: scoreChatSearchMatch(query, normalizedQuery, normalizedQueryLower, relaxedQuery, getChatRowSearchText(cell))
+        })),
         rows: debugRows
       });
       throw new Error(`No matching visible chat found for query: ${query}`);
@@ -905,11 +959,14 @@ async function openChat(queryValue) {
     clickableTarget.scrollIntoView({ block: 'center', behavior: 'instant' });
     await wait(200);
     assertRunning('open-chat-click');
-    simulateUserClick(clickableTarget);
     if (typeof clickableTarget.click === 'function') clickableTarget.click();
     log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''));
 
-    const switched = await confirmChatSwitched(query, 12000);
+    let switched = await confirmChatSwitched(query, 2500);
+    if (!switched) {
+      simulateUserClick(clickableTarget);
+      switched = await confirmChatSwitched(query, 9500);
+    }
     if (switched) {
       const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
       if (messageBox) return messageBox;
