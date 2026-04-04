@@ -96,6 +96,7 @@ SELECTORS.additionalFilterMenuItems = ['[role="menuitem"]', 'div[role="option"]'
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const RESUME_STORAGE_KEY = 'waContentResumeState';
+let isRunning = true;
 
 function randomBetween(min, max) {
   const safeMin = Number(min) || 0;
@@ -311,7 +312,21 @@ function getEditableText(box) {
   return String(box?.innerText || '').replace(/\r/g, '');
 }
 
+function isInterruptedError(error) {
+  return error?.name === 'AutomationInterruptedError' || /interrupted/i.test(String(error?.message || ''));
+}
+
+function assertRunning(stage = 'automation') {
+  if (!isRunning) {
+    log(`[STOP] Interrupt at ${stage}`);
+    const error = new Error(`Automation interrupted during ${stage}`);
+    error.name = 'AutomationInterruptedError';
+    throw error;
+  }
+}
+
 async function typeSearch(query) {
+  assertRunning('search-start');
   const value = String(query || '').trim();
   if (!value) throw new Error('Missing contact/group search query.');
 
@@ -325,21 +340,23 @@ async function typeSearch(query) {
     searchBox.value = '';
     searchBox.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
     for (const char of value) {
+      assertRunning('search-typing');
       searchBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
       searchBox.value += char;
       searchBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
       searchBox.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-      await wait(100);
+      await wait(randomBetween(80, 150));
     }
   } else {
     clearEditableBox(searchBox);
     searchBox.focus();
     for (const char of value) {
+      assertRunning('search-typing');
       searchBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
       document.execCommand('insertText', false, char);
       searchBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
       searchBox.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-      await wait(100);
+      await wait(randomBetween(80, 150));
     }
   }
   log('[Search] Typing completed:', value);
@@ -348,7 +365,9 @@ async function typeSearch(query) {
 async function waitForSearchResults(timeoutMs = 10000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const rows = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((row) => row?.textContent?.trim());
+    assertRunning('search-results');
+    const paneSide = queryWithFallback(SELECTORS.paneSide);
+    const rows = queryAllWithFallback(['#pane-side div[role="listitem"]'], paneSide || document).filter((row) => row?.textContent?.trim());
     if (rows.length) {
       log('[Search] Results available:', rows.length);
       return rows;
@@ -358,28 +377,37 @@ async function waitForSearchResults(timeoutMs = 10000) {
   throw new Error('No sidebar chat item found');
 }
 
-async function typeMessage(message, { delayPerChar = 100, confirmTimeoutMs = 15000 } = {}) {
+async function typeMessage(message, { delayPerChar = 45, confirmTimeoutMs = 15000 } = {}) {
+  assertRunning('message-start');
   const text = String(message || '');
   if (!text.trim()) throw new Error('Message is empty after template processing');
 
-  const box = await waitForElement(SELECTORS.messageBox, 15000);
+  const box = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 15000);
   if (!(box instanceof HTMLElement)) throw new Error('Message box is not editable.');
 
   clearEditableBox(box);
   box.focus();
   log('[Message] Typing started:', `${text.length} chars`);
 
+  let typedChars = 0;
   for (const char of text) {
-    box.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+    assertRunning('message-typing');
+    const activeBox = queryWithFallback(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox]);
+    if (!(activeBox instanceof HTMLElement)) throw new Error('Message box disappeared during typing.');
+    activeBox.focus();
+    activeBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
     document.execCommand('insertText', false, char);
-    box.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
-    box.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-    await wait(delayPerChar);
+    activeBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+    activeBox.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+    typedChars += 1;
+    if (typedChars % 10 === 0) log('[Message] Typing progress', `${typedChars}/${text.length}`);
+    await wait(randomBetween(Math.max(30, delayPerChar), 80));
   }
 
   const started = Date.now();
   while (Date.now() - started < confirmTimeoutMs) {
-    const currentBox = queryWithFallback(SELECTORS.messageBox);
+    assertRunning('message-confirm');
+    const currentBox = queryWithFallback(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox]);
     if (!(currentBox instanceof HTMLElement)) {
       await wait(120);
       continue;
@@ -387,18 +415,19 @@ async function typeMessage(message, { delayPerChar = 100, confirmTimeoutMs = 150
 
     const currentText = getEditableText(currentBox);
     if (currentText === text) {
-      log('[Message] Confirmation success');
+      log('[Message] Typing completed and confirmed');
       return currentBox;
     }
 
-    if (text.startsWith(currentText)) {
-      const missing = text.slice(currentText.length);
+    if (text !== currentText) {
+      const missing = text.slice(currentText.length > 0 ? currentText.length : 0);
       log('[Message] Retrying missing characters:', missing.length);
       currentBox.focus();
       for (const char of missing) {
+        assertRunning('message-retry-missing');
         document.execCommand('insertText', false, char);
         currentBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
-        await wait(delayPerChar);
+        await wait(randomBetween(30, 80));
       }
     }
     await wait(120);
@@ -423,6 +452,7 @@ async function waitForElement(selectors, timeoutMs = 25000, pollMs = 250, root =
       }, timeoutMs);
 
       const observer = new MutationObserver(() => {
+        if (!isRunning) return;
         const found = queryWithFallback(normalizedSelectors, root);
         if (!found || resolved) return;
         resolved = true;
@@ -729,28 +759,52 @@ function filterChats(snapshot = {}, filter = {}) {
 }
 
 async function openChat(queryValue) {
+  assertRunning('open-chat-start');
   const query = String(queryValue || '').trim();
   if (!query) throw new Error('Missing contact/group search query.');
 
   log('[Chat] Opening chat:', query);
   await ensureWhatsAppReady();
   for (let attempt = 1; attempt <= 3; attempt += 1) {
+    assertRunning('open-chat-attempt');
     log(`[Chat] Attempt ${attempt} for ${query}`);
     await typeSearch(query);
     const rows = await waitForSearchResults(10000);
     const targetRow = rows[0];
     if (!(targetRow instanceof HTMLElement)) throw new Error('No sidebar chat item found');
-    targetRow.scrollIntoView({ block: 'center', behavior: 'instant' });
+    const clickableTarget =
+      targetRow.querySelector('a[href], [role="button"], [tabindex], span[title], div[title]') || targetRow;
+    clickableTarget.scrollIntoView({ block: 'center', behavior: 'instant' });
     await wait(200);
-    simulateUserClick(targetRow);
+    assertRunning('open-chat-click');
+    simulateUserClick(clickableTarget);
     log('[Chat] Clicked first search result');
 
-    const messageBox = await waitForElement(SELECTORS.messageBox, 16000);
-    if (messageBox) return messageBox;
+    const switched = await confirmChatSwitched(query, 12000);
+    if (switched) {
+      const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
+      if (messageBox) return messageBox;
+    }
     if (attempt < 3) await wait(800);
   }
 
   throw new Error(`Unable to open chat for query: ${query}`);
+}
+
+async function confirmChatSwitched(expectedContact, timeoutMs = 12000) {
+  const expected = String(expectedContact || '').trim().toLowerCase();
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    assertRunning('chat-confirm');
+    const header = queryWithFallback(['header span[title]', ...SELECTORS.chatHeaderTitle]);
+    const title = cleanText(header?.getAttribute?.('title') || header?.textContent || '').toLowerCase();
+    if (title && (title.includes(expected) || expected.includes(title))) {
+      log('[Chat] Chat confirmed switched:', title);
+      return true;
+    }
+    await wait(150);
+  }
+  return false;
 }
 
 async function openChatBySearch(queryValue) {
@@ -764,9 +818,11 @@ async function openChatByPhone(phone) {
 }
 
 async function sendMessageSafe() {
-  const box = queryWithFallback(SELECTORS.messageBox);
+  assertRunning('send-before');
+  const box = queryWithFallback(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox]);
   if (!(box instanceof HTMLElement)) throw new Error('Message box not found');
   await wait(200);
+  assertRunning('send-enter');
   box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
   box.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
   log('[Message] Send action fired');
@@ -779,6 +835,10 @@ async function setMessageAndSend(text) {
 
   await typeMessage(message);
   await wait(200);
+  assertRunning('send-protection');
+  const latestBox = queryWithFallback(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox]);
+  const latestText = getEditableText(latestBox);
+  if (latestText !== message) throw new Error('Send blocked because message text is not fully typed.');
   await sendMessageSafe();
 }
 
@@ -1163,17 +1223,25 @@ async function runSendLoop(rows = []) {
   const queue = Array.isArray(rows) ? rows : [];
   const initialState = await getResumeState();
   const startIndex = Number(initialState.currentIndex) || 0;
+  isRunning = true;
+  await chrome.storage.local.set({ isRunning: true });
 
   for (const [offset, row] of queue.slice(startIndex).entries()) {
+    assertRunning('loop-contact-start');
     const index = startIndex + offset;
     let success = false;
 
     for (let retry = 0; retry <= 2; retry += 1) {
       try {
+        assertRunning('loop-before-send');
         await sendSingleMessage(row);
         success = true;
         break;
       } catch (error) {
+        if (isInterruptedError(error)) {
+          await setResumeState({ currentIndex: index, interruptedAt: Date.now(), row });
+          return { success: false, stopped: true, index, error: error.message };
+        }
         log(`[Loop] Contact failed at index ${index} (retry ${retry + 1}/2):`, error?.message || error);
         await setResumeState({ currentIndex: index, failedRow: row, failedAt: Date.now() });
         if (retry < 2) await wait(randomBetween(2000, 5000));
@@ -1186,6 +1254,7 @@ async function runSendLoop(rows = []) {
 
     await setResumeState({ currentIndex: index + 1, updatedAt: Date.now() });
     if (index + 1 < queue.length) {
+      assertRunning('loop-post-send-delay');
       await wait(randomBetween(2000, 5000));
     }
   }
@@ -1272,8 +1341,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.START_CAMPAIGN_FROM_STORAGE: {
+        isRunning = true;
+        await chrome.storage.local.set({ isRunning: true });
         const result = await runSendLoop(message.rows || message.data || []);
         sendResponse(result);
+        break;
+      }
+      case ACTIONS.STOP_AUTOMATION: {
+        isRunning = false;
+        log('[STOP] STOP triggered from popup/background');
+        await chrome.storage.local.set({ isRunning: false });
+        sendResponse({ success: true, stopped: true });
+        break;
+      }
+      case ACTIONS.PAUSE_AUTOMATION: {
+        isRunning = false;
+        await chrome.storage.local.set({ isRunning: false });
+        sendResponse({ success: true, paused: true });
+        break;
+      }
+      case ACTIONS.RESUME_AUTOMATION: {
+        isRunning = true;
+        await chrome.storage.local.set({ isRunning: true });
+        sendResponse({ success: true, resumed: true });
         break;
       }
       default:
