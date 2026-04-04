@@ -338,6 +338,47 @@ function scoreChatSearchMatch(query, normalizedQuery, normalizedQueryLower, rela
   return score;
 }
 
+function isLikelyNonChatSidebarRow(cell, precomputedText = '') {
+  if (!(cell instanceof HTMLElement)) return true;
+  const text = cleanText(precomputedText || getChatRowSearchText(cell)).toLowerCase();
+  if (!text) return true;
+
+  const blockedSnippets = ['download whatsapp', 'get extra features', 'sponsored', 'advertisement'];
+  if (blockedSnippets.some((snippet) => text.includes(snippet))) return true;
+
+  const dataTestId = String(cell.getAttribute('data-testid') || '').toLowerCase();
+  if (dataTestId.includes('banner') || dataTestId.includes('promo')) return true;
+
+  return false;
+}
+
+function pickFallbackSearchResultCell(sidebarCells = []) {
+  const scored = sidebarCells
+    .map((cell, index) => {
+      const text = cleanText(getChatRowSearchText(cell));
+      const row = cell.closest('[role="row"]');
+      const hasNameLikeNode = !!cell.querySelector('span[dir="auto"], [title], [aria-label]');
+      const hasSelectedState = cell.hasAttribute('aria-selected') || !!cell.querySelector('[aria-selected]');
+      const hasTabIndex = cell.hasAttribute('tabindex') || !!cell.querySelector('[tabindex]');
+      let confidence = 0;
+      if (row) confidence += 2;
+      if (hasNameLikeNode) confidence += 2;
+      if (hasSelectedState) confidence += 1;
+      if (hasTabIndex) confidence += 1;
+      return {
+        cell,
+        index,
+        text,
+        confidence,
+        blocked: isLikelyNonChatSidebarRow(cell, text)
+      };
+    })
+    .filter((entry) => !entry.blocked && hasMeaningfulChatRowText(entry.text))
+    .sort((a, b) => b.confidence - a.confidence || a.index - b.index);
+
+  return scored[0]?.cell || null;
+}
+
 function hasMemberLikeText(value) {
   const text = cleanText(value);
   if (!text) return false;
@@ -1104,6 +1145,25 @@ async function openChat(queryValue) {
       const matchedCell = scoredMatches[0]?.cell || (sidebarCells.length === 1 ? sidebarCells[0] : null);
 
       if (!matchedCell) {
+        const fallbackCell = pickFallbackSearchResultCell(sidebarCells);
+        if (fallbackCell) {
+          log('[Search][Results][FallbackSelect]', {
+            query,
+            variant,
+            selectedText: getChatRowSearchText(fallbackCell)
+          });
+          assertRunning('open-chat-click-fallback');
+          const clickableTarget = resolveChatClickableTarget(fallbackCell) || fallbackCell;
+          const clickResult = await clickChatRow(clickableTarget);
+          log('[Chat] Fallback chat clicked:', cleanText(fallbackCell.innerText || ''), 'clickResult=', clickResult);
+          let switched = await confirmChatSwitched(variant.value, 3200);
+          if (!switched) switched = await confirmChatSwitched(query, 9500);
+          if (switched) {
+            const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
+            if (messageBox) return messageBox;
+          }
+          log('[Chat] Fallback click did not confirm chat switch', { query, variant });
+        }
         log('[Search][Results][NoMatch]', {
           query,
           variant,
