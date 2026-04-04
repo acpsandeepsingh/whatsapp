@@ -261,6 +261,22 @@ function queryAllWithFallback(selectors, root = document) {
   return [];
 }
 
+function getComposerBox() {
+  const footerComposer = queryWithFallback(SELECTORS.messageBox);
+  if (footerComposer instanceof HTMLElement) return footerComposer;
+
+  const candidates = queryAllWithFallback(['div[contenteditable="true"][role="textbox"]']);
+  return (
+    candidates.find((candidate) => {
+      if (!(candidate instanceof HTMLElement)) return false;
+      if (candidate.closest('footer')) return true;
+      if (candidate.closest('aside, header, [data-testid="chat-list-search"]')) return false;
+      const ariaLabel = cleanText(candidate.getAttribute('aria-label') || '').toLowerCase();
+      return ariaLabel.includes('message');
+    }) || null
+  );
+}
+
 function normalizePhone(value) {
   return String(value || '').replace(/[^\d]/g, '');
 }
@@ -546,7 +562,7 @@ async function typeMessage(message, { delayPerChar = 45, confirmTimeoutMs = 1500
   const text = String(message || '');
   if (!text.trim()) throw new Error('Message is empty after template processing');
 
-  const box = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 15000);
+  const box = await waitForElement(SELECTORS.messageBox, 15000);
   if (!(box instanceof HTMLElement)) throw new Error('Message box is not editable.');
 
   clearEditableBox(box);
@@ -556,7 +572,7 @@ async function typeMessage(message, { delayPerChar = 45, confirmTimeoutMs = 1500
   let typedChars = 0;
   for (const char of text) {
     assertRunning('message-typing');
-    const activeBox = queryWithFallback(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox]);
+    const activeBox = getComposerBox();
     if (!(activeBox instanceof HTMLElement)) throw new Error('Message box disappeared during typing.');
     activeBox.focus();
     activeBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
@@ -571,7 +587,7 @@ async function typeMessage(message, { delayPerChar = 45, confirmTimeoutMs = 1500
   const started = Date.now();
   while (Date.now() - started < confirmTimeoutMs) {
     assertRunning('message-confirm');
-    const currentBox = queryWithFallback(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox]);
+    const currentBox = getComposerBox();
     if (!(currentBox instanceof HTMLElement)) {
       await wait(120);
       continue;
@@ -1175,7 +1191,7 @@ async function openChat(queryValue) {
           let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: fallbackRowText });
           if (!switched) switched = await confirmChatSwitched(query, 9500, { clickedRowText: fallbackRowText });
           if (switched) {
-            const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
+            const messageBox = await waitForElement(SELECTORS.messageBox, 16000);
             if (messageBox) return messageBox;
           }
           log('[Chat] Fallback click did not confirm chat switch', { query, variant });
@@ -1218,7 +1234,7 @@ async function openChat(queryValue) {
       }
       switched = switched || (await confirmChatSwitched(variant.value, 9500, { clickedRowText: matchedRowText }));
       if (switched) {
-        const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
+        const messageBox = await waitForElement(SELECTORS.messageBox, 16000);
         if (messageBox) return messageBox;
       }
       log('[Chat] Switch confirmation failed for attempt', { query, variant });
@@ -1265,7 +1281,7 @@ async function openChatByPhone(phone) {
 
 async function sendMessageSafe() {
   assertRunning('send-before');
-  const box = queryWithFallback(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox]);
+  const box = getComposerBox();
   if (!(box instanceof HTMLElement)) throw new Error('Message box not found');
   await wait(200);
   assertRunning('send-enter');
@@ -1285,7 +1301,7 @@ async function setMessageAndSend(text) {
     log('[Message] Send skipped (STOP triggered)');
     assertRunning('send-protection');
   }
-  const latestBox = queryWithFallback(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox]);
+  const latestBox = getComposerBox();
   const latestText = getEditableText(latestBox);
   if (latestText !== message) throw new Error('Send blocked because message text is not fully typed.');
   await sendMessageSafe();
