@@ -956,17 +956,16 @@ async function openChat(queryValue) {
     }
 
     const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
-    clickableTarget.scrollIntoView({ block: 'center', behavior: 'instant' });
+    const visibleTarget = findVisibleChatTarget(clickableTarget) || findVisibleChatTarget(matchedCell) || matchedCell;
+    visibleTarget.scrollIntoView({ block: 'center', behavior: 'instant' });
     await wait(200);
     assertRunning('open-chat-click');
-    if (typeof clickableTarget.click === 'function') clickableTarget.click();
+    realClick(visibleTarget);
     log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''));
 
-    let switched = await confirmChatSwitched(query, 2500);
-    if (!switched) {
-      simulateUserClick(clickableTarget);
-      switched = await confirmChatSwitched(query, 9500);
-    }
+    let switched = await confirmChatSwitched(query, 3200);
+    if (!switched) realClick(visibleTarget);
+    switched = switched || (await confirmChatSwitched(query, 9500));
     if (switched) {
       const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
       if (messageBox) return messageBox;
@@ -1034,11 +1033,42 @@ async function setMessageAndSend(text) {
   await sendMessageSafe();
 }
 
-function simulateUserClick(node) {
-  if (!(node instanceof Element)) return;
-  ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
-    node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: window }));
+function findVisibleChatTarget(node) {
+  if (!(node instanceof HTMLElement)) return null;
+  const candidates = [node, ...node.querySelectorAll('[role="gridcell"], [role="button"], div[tabindex], span[dir="auto"]')].filter(
+    (item) => item instanceof HTMLElement
+  );
+  return (
+    candidates.find((candidate) => {
+      const style = window.getComputedStyle(candidate);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = candidate.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }) || null
+  );
+}
+
+function realClick(node) {
+  if (!(node instanceof HTMLElement)) return false;
+  const rect = node.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const clientX = rect.left + rect.width / 2;
+  const clientY = rect.top + rect.height / 2;
+  ['mousedown', 'mouseup', 'click'].forEach((type) => {
+    node.dispatchEvent(
+      new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        button: 0,
+        buttons: type === 'mousedown' ? 1 : 0,
+        clientX,
+        clientY
+      })
+    );
   });
+  return true;
 }
 
 async function downloadAttachmentAsFile(url) {
