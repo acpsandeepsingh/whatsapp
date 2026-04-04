@@ -900,6 +900,65 @@ function resolveChatClickableTarget(cell) {
   return baseGridCell.getAttribute('role') === 'grid' ? row || baseGridCell : baseGridCell;
 }
 
+function getChatRowClickableCandidates(node) {
+  if (!(node instanceof HTMLElement)) return [];
+  const unique = new Set();
+  const candidates = [];
+  const pushCandidate = (candidate) => {
+    if (!(candidate instanceof HTMLElement)) return;
+    if (unique.has(candidate)) return;
+    unique.add(candidate);
+    candidates.push(candidate);
+  };
+
+  pushCandidate(node);
+  pushCandidate(node.closest('[role="gridcell"]'));
+  pushCandidate(node.closest('[role="row"] [role="gridcell"][tabindex]'));
+  pushCandidate(node.closest('[role="row"]'));
+  pushCandidate(node.closest('button'));
+  pushCandidate(node.closest('[role="button"]'));
+
+  const nestedSelectors = [
+    '[role="gridcell"][tabindex]',
+    '[data-testid="cell-frame-container"]',
+    '[role="button"]',
+    'button',
+    'div[aria-selected]',
+    'div[tabindex="-1"]',
+    'div[tabindex="0"]'
+  ];
+  nestedSelectors.forEach((selector) => {
+    node.querySelectorAll(selector).forEach((candidate) => pushCandidate(candidate));
+  });
+  return candidates;
+}
+
+async function clickChatRow(node) {
+  const candidates = getChatRowClickableCandidates(node)
+    .map((candidate) => findVisibleChatTarget(candidate))
+    .filter((candidate) => candidate instanceof HTMLElement);
+  const target = candidates[0] || (findVisibleChatTarget(node) instanceof HTMLElement ? findVisibleChatTarget(node) : null);
+  if (!(target instanceof HTMLElement)) return false;
+
+  target.scrollIntoView({ block: 'center', behavior: 'instant' });
+  await wait(150);
+
+  const clickSources = [target, ...getChatRowClickableCandidates(target)];
+  for (const source of clickSources) {
+    if (!(source instanceof HTMLElement)) continue;
+    source.focus?.();
+    if (realClick(source)) return true;
+    source.click?.();
+    await wait(60);
+    if (source === document.activeElement) {
+      source.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      source.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      return true;
+    }
+  }
+  return false;
+}
+
 async function openChat(queryValue) {
   assertRunning('open-chat-start');
   const query = String(queryValue || '').trim();
@@ -955,16 +1014,13 @@ async function openChat(queryValue) {
       throw new Error(`No matching visible chat found for query: ${query}`);
     }
 
-    const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
-    const visibleTarget = findVisibleChatTarget(clickableTarget) || findVisibleChatTarget(matchedCell) || matchedCell;
-    visibleTarget.scrollIntoView({ block: 'center', behavior: 'instant' });
-    await wait(200);
     assertRunning('open-chat-click');
-    realClick(visibleTarget);
+    const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
+    await clickChatRow(clickableTarget);
     log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''));
 
     let switched = await confirmChatSwitched(query, 3200);
-    if (!switched) realClick(visibleTarget);
+    if (!switched) await clickChatRow(clickableTarget);
     switched = switched || (await confirmChatSwitched(query, 9500));
     if (switched) {
       const messageBox = await waitForElement(['div[contenteditable="true"][role="textbox"]', ...SELECTORS.messageBox], 16000);
