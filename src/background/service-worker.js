@@ -7,7 +7,9 @@ const state = {
   queue: [],
   currentIndex: 0,
   running: false,
+  processing: false,
   paused: false,
+  campaignId: null,
   stats: {
     total: 0,
     sent: 0,
@@ -222,13 +224,19 @@ function transformQueueRows(rows = []) {
 }
 
 async function startCampaign(rows = [], incomingSettings = {}) {
+  if (state.running) {
+    throw new Error('A campaign is already running. Pause/Stop the active run before starting a new one.');
+  }
+
   state.settings = sanitizeSettings({ ...state.settings, ...incomingSettings });
   state.settings = await saveSettings(state.settings);
 
   state.queue = transformQueueRows(rows || []);
   state.currentIndex = 0;
   state.running = true;
+  state.processing = false;
   state.paused = false;
+  state.campaignId = `campaign-${Date.now()}`;
   state.stats = {
     total: state.queue.length,
     sent: 0,
@@ -239,82 +247,87 @@ async function startCampaign(rows = [], incomingSettings = {}) {
 
   await getWhatsAppTab();
   await broadcastProgress({ status: 'started' });
-  processQueue();
+  processQueue(state.campaignId);
   return getProgress();
 }
 
-async function processQueue() {
-  if (!state.running) return;
+async function processQueue(campaignId = state.campaignId) {
+  if (!state.running || state.processing || campaignId !== state.campaignId) return;
+  state.processing = true;
 
-  while (state.currentIndex < state.queue.length && state.running) {
-    if (state.paused) {
-      await wait(300);
-      continue;
-    }
-
-    const item = state.queue[state.currentIndex];
-    const payload = createMessage(ACTIONS.SEND_MESSAGE, {
-      data: {
-        srNo: item.srNo,
-        rowId: item.rowId,
-        phone: item.mobileNumber,
-        message: item.renderedMessage,
-        attachmentUrl: state.settings.attachmentSendingEnabled ? item.attachmentUrl : '',
-        attachmentSendingEnabled: state.settings.attachmentSendingEnabled,
-        rawRow: item.raw || {}
-      }
-    });
-
-    try {
-      console.log('[WA CRM][Background] ACTION:', ACTIONS.SEND_MESSAGE, payload.data);
-      const result = await sendToContent(payload);
-      if (!result?.success) throw new Error(result?.error || 'Unknown send error');
-
-      state.stats.sent += 1;
-      state.currentIndex += 1;
-      state.stats.pending = state.queue.length - state.currentIndex;
-      await broadcastProgress({
-        status: 'success',
-        index: state.currentIndex,
-        rowId: item.rowId,
-        phone: item.mobileNumber,
-        detail: result.mode || 'text'
-      });
-    } catch (error) {
-      item._retryCount += 1;
-      if (item._retryCount <= state.settings.maxRetries) {
-        state.stats.retries += 1;
-        await broadcastProgress({
-          status: 'retrying',
-          index: state.currentIndex + 1,
-          rowId: item.rowId,
-          retry: item._retryCount,
-          phone: item.mobileNumber,
-          reason: error.message
-        });
-        await wait(1200);
+  try {
+    while (state.currentIndex < state.queue.length && state.running && campaignId === state.campaignId) {
+      if (state.paused) {
+        await wait(300);
         continue;
       }
 
-      state.stats.failed += 1;
-      state.currentIndex += 1;
-      state.stats.pending = state.queue.length - state.currentIndex;
-      await broadcastProgress({
-        status: 'failed',
-        index: state.currentIndex,
-        rowId: item.rowId,
-        phone: item.mobileNumber,
-        reason: error.message
+      const item = state.queue[state.currentIndex];
+      const payload = createMessage(ACTIONS.SEND_MESSAGE, {
+        data: {
+          srNo: item.srNo,
+          rowId: item.rowId,
+          phone: item.mobileNumber,
+          message: item.renderedMessage,
+          attachmentUrl: state.settings.attachmentSendingEnabled ? item.attachmentUrl : '',
+          attachmentSendingEnabled: state.settings.attachmentSendingEnabled,
+          rawRow: item.raw || {}
+        }
       });
+
+      try {
+        console.log('[WA CRM][Background] ACTION:', ACTIONS.SEND_MESSAGE, payload.data);
+        const result = await sendToContent(payload);
+        if (!result?.success) throw new Error(result?.error || 'Unknown send error');
+
+        state.stats.sent += 1;
+        state.currentIndex += 1;
+        state.stats.pending = state.queue.length - state.currentIndex;
+        await broadcastProgress({
+          status: 'success',
+          index: state.currentIndex,
+          rowId: item.rowId,
+          phone: item.mobileNumber,
+          detail: result.mode || 'text'
+        });
+      } catch (error) {
+        item._retryCount += 1;
+        if (item._retryCount <= state.settings.maxRetries) {
+          state.stats.retries += 1;
+          await broadcastProgress({
+            status: 'retrying',
+            index: state.currentIndex + 1,
+            rowId: item.rowId,
+            retry: item._retryCount,
+            phone: item.mobileNumber,
+            reason: error.message
+          });
+          await wait(1200);
+          continue;
+        }
+
+        state.stats.failed += 1;
+        state.currentIndex += 1;
+        state.stats.pending = state.queue.length - state.currentIndex;
+        await broadcastProgress({
+          status: 'failed',
+          index: state.currentIndex,
+          rowId: item.rowId,
+          phone: item.mobileNumber,
+          reason: error.message
+        });
+      }
+
+      await wait(getPerMessageDelay());
     }
 
-    await wait(getPerMessageDelay());
-  }
-
-  if (state.currentIndex >= state.queue.length) {
-    state.running = false;
-    state.paused = false;
-    await broadcastProgress({ status: 'completed' });
+    if (state.currentIndex >= state.queue.length && campaignId === state.campaignId) {
+      state.running = false;
+      state.paused = false;
+      await broadcastProgress({ status: 'completed' });
+    }
+  } finally {
+    state.processing = false;
   }
 }
 
@@ -434,14 +447,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (state.running) {
           state.paused = false;
           await broadcastProgress({ status: 'resumed' });
-          processQueue();
+          processQueue(state.campaignId);
         }
         sendResponse({ success: true });
         break;
       }
       case ACTIONS.STOP_AUTOMATION: {
         state.running = false;
+        state.processing = false;
         state.paused = false;
+        state.campaignId = null;
         await broadcastProgress({ status: 'stopped' });
         sendResponse({ success: true });
         break;

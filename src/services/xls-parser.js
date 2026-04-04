@@ -130,8 +130,9 @@ function findLikelyHeaderRowIndex(rows = []) {
   return -1;
 }
 
-function parseRows(rows = [], indexes = {}, { headerDetected = false } = {}) {
+function parseRows(rows = [], indexes = {}, { headerDetected = false, logInvalidRows = false } = {}) {
   const output = [];
+  let invalidRowCount = 0;
 
   for (let index = 0; index < rows.length; index += 1) {
     if (headerDetected && index === 0) continue;
@@ -148,18 +149,21 @@ function parseRows(rows = [], indexes = {}, { headerDetected = false } = {}) {
     const attachmentUrl = normalizeCell(row[indexes.attachmentIndex]);
 
     if (!mobileNumber || !isValidPhone(mobileNumber)) {
-      console.warn('[WA CRM][XLS] Ignoring invalid row:', {
-        rowNumber: index + 1,
-        srNo,
-        mobileRaw,
-        mobileNumber,
-        messageTemplate
-      });
+      invalidRowCount += 1;
+      if (logInvalidRows) {
+        console.warn('[WA CRM][XLS] Ignoring invalid row:', {
+          rowNumber: index + 1,
+          srNo,
+          mobileRaw,
+          mobileNumber,
+          messageTemplate
+        });
+      }
       continue;
     }
 
     const parsedRow = {
-      id: `row-${index}-${Date.now()}`,
+      id: `row-${index + 1}-${mobileNumber.slice(-6)}`,
       srNo,
       mobileNumber,
       name,
@@ -171,12 +175,10 @@ function parseRows(rows = [], indexes = {}, { headerDetected = false } = {}) {
         source: row
       }
     };
-
-    console.log('[WA CRM][XLS] Parsed row:', parsedRow);
     output.push(parsedRow);
   }
 
-  return output;
+  return { rows: output, invalidRowCount };
 }
 
 export async function parseWorkbook(file, { hasHeader = null } = {}) {
@@ -200,7 +202,8 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
   }
 
   const firstRow = normalizeRowArray(rows[0]);
-  let headerDetected = isHeaderRow(firstRow);
+  const explicitHeaderChoice = hasHeader === true || hasHeader === false ? hasHeader : null;
+  let headerDetected = explicitHeaderChoice ?? isHeaderRow(firstRow);
   let indexes = detectColumnIndexes(firstRow);
   let parseStartIndex = 0;
 
@@ -214,13 +217,14 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
     console.log('[WA CRM][XLS] Header row detected and skipped:', rows[0], indexes);
   }
 
-  let output = parseRows(rows.slice(parseStartIndex), indexes, { headerDetected: false });
+  let { rows: output, invalidRowCount } = parseRows(rows.slice(parseStartIndex), indexes, { headerDetected: false });
 
   // Some sheets include a title row with words like "phone" which can be misdetected
   // as a real header. If that happens and import result is empty, retry with inferred indexes.
   if (!output.length && rows.length > 1) {
     const fallbackIndexes = inferColumnIndexesFromData(rows.slice(1), indexes);
-    const fallbackOutput = parseRows(rows.slice(parseStartIndex), fallbackIndexes, { headerDetected: false });
+    const fallbackParsed = parseRows(rows.slice(parseStartIndex), fallbackIndexes, { headerDetected: false });
+    const fallbackOutput = fallbackParsed.rows;
 
     if (fallbackOutput.length) {
       console.warn('[WA CRM][XLS] Recovered import with fallback column inference:', {
@@ -229,6 +233,7 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
       });
       indexes = fallbackIndexes;
       output = fallbackOutput;
+      invalidRowCount = fallbackParsed.invalidRowCount;
     }
   }
 
@@ -241,7 +246,8 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
       const actualHeader = normalizeRowArray(rows[actualHeaderIndex]);
       const headerIndexes = detectColumnIndexes(actualHeader);
       const bodyRows = rows.slice(actualHeaderIndex + 1);
-      const headerOutput = parseRows(bodyRows, headerIndexes, { headerDetected: false });
+      const headerParsed = parseRows(bodyRows, headerIndexes, { headerDetected: false });
+      const headerOutput = headerParsed.rows;
 
       if (headerOutput.length) {
         console.warn('[WA CRM][XLS] Recovered import by detecting header row later in sheet:', {
@@ -251,6 +257,7 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
         output = headerOutput;
         indexes = headerIndexes;
         headerDetected = true;
+        invalidRowCount = headerParsed.invalidRowCount;
       }
     }
   }
@@ -259,6 +266,7 @@ export async function parseWorkbook(file, { hasHeader = null } = {}) {
     sheetName,
     totalRows: rows.length,
     importedRows: output.length,
+    invalidRows: invalidRowCount,
     headerDetected,
     indexes
   });
