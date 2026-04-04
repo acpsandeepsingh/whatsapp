@@ -767,6 +767,8 @@ async function openChat(queryValue) {
   assertRunning('open-chat-start');
   const query = String(queryValue || '').trim();
   if (!query) throw new Error('Missing contact/group search query.');
+  const normalizedQuery = normalizePhone(query);
+  const normalizedQueryLower = query.toLowerCase();
 
   log('[Chat] Opening chat:', query);
   await ensureWhatsAppReady();
@@ -775,14 +777,38 @@ async function openChat(queryValue) {
     log(`[Chat] Attempt ${attempt} for ${query}`);
     await typeSearch(query);
     await waitForSearchResults(10000);
-    const chat = document.querySelector('#pane-side [role="gridcell"]');
-    if (!(chat instanceof HTMLElement)) throw new Error('No sidebar chat item found');
-    const clickableTarget = chat.querySelector('div') || chat;
+    const sidebarCells = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((cell) => {
+      if (!(cell instanceof HTMLElement)) return false;
+      if (cell.hidden) return false;
+      const style = window.getComputedStyle(cell);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = cell.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+    if (!sidebarCells.length) throw new Error('No visible sidebar chat item found');
+
+    const matchedCell =
+      sidebarCells.find((cell) => {
+        const cellText = cleanText(cell.innerText || cell.textContent || '');
+        if (!cellText) return false;
+        const cellTextLower = cellText.toLowerCase();
+        if (cellTextLower.includes(normalizedQueryLower) || normalizedQueryLower.includes(cellTextLower)) return true;
+        if (!normalizedQuery) return false;
+        const normalizedCellText = normalizePhone(cellText);
+        return Boolean(normalizedCellText && (normalizedCellText.includes(normalizedQuery) || normalizedQuery.includes(normalizedCellText)));
+      }) || null;
+
+    if (!matchedCell) throw new Error(`No matching visible chat found for query: ${query}`);
+
+    const clickableTarget =
+      matchedCell.querySelector(
+        '[data-testid="cell-frame-container"], [role="button"], [tabindex], button, a, div[aria-selected], div[aria-label], div[title]'
+      ) || matchedCell;
     clickableTarget.scrollIntoView({ block: 'center', behavior: 'instant' });
     await wait(200);
     assertRunning('open-chat-click');
     simulateUserClick(clickableTarget);
-    log('[Chat] Chat clicked');
+    log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''));
 
     const switched = await confirmChatSwitched(query, 12000);
     if (switched) {
@@ -797,13 +823,16 @@ async function openChat(queryValue) {
 
 async function confirmChatSwitched(expectedContact, timeoutMs = 12000) {
   const expected = String(expectedContact || '').trim().toLowerCase();
+  const expectedPhone = normalizePhone(expectedContact);
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     assertRunning('chat-confirm');
     const header = queryWithFallback(['header span[title]', ...SELECTORS.chatHeaderTitle]);
-    const title = cleanText(header?.getAttribute?.('title') || header?.textContent || '').toLowerCase();
-    if (title && (title.includes(expected) || expected.includes(title))) {
-      log('[Chat] Chat switched:', title);
+    const rawTitle = cleanText(header?.getAttribute?.('title') || header?.textContent || '');
+    const title = rawTitle.toLowerCase();
+    const titlePhone = normalizePhone(rawTitle);
+    if (title && (title.includes(expected) || expected.includes(title) || (expectedPhone && titlePhone && (titlePhone.includes(expectedPhone) || expectedPhone.includes(titlePhone))))) {
+      log('[Chat] Chat switched:', title || rawTitle);
       return true;
     }
     await wait(150);
