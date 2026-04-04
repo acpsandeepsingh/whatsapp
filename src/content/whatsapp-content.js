@@ -245,6 +245,38 @@ function cleanText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function isLikelyPhoneQuery(value) {
+  return normalizePhone(value).length >= 7;
+}
+
+function isPhoneMatch(queryText, rowText) {
+  const queryPhone = normalizePhone(queryText);
+  const rowPhone = normalizePhone(rowText);
+  if (!queryPhone || !rowPhone) return false;
+  if (rowPhone.includes(queryPhone) || queryPhone.includes(rowPhone)) return true;
+  const minSuffixLength = Math.min(Math.max(7, queryPhone.length - 2), queryPhone.length, rowPhone.length);
+  if (minSuffixLength < 7) return false;
+  return rowPhone.slice(-minSuffixLength) === queryPhone.slice(-minSuffixLength);
+}
+
+function scoreChatSearchMatch(query, normalizedQuery, normalizedQueryLower, relaxedQuery, rowText) {
+  const text = cleanText(rowText);
+  if (!text) return -1;
+  const textLower = text.toLowerCase();
+  const relaxedText = textLower.replace(/[^a-z0-9]+/g, '');
+  const textPhone = normalizePhone(text);
+  let score = -1;
+
+  if (textLower === normalizedQueryLower) score = Math.max(score, 100);
+  if (textLower.includes(normalizedQueryLower) || normalizedQueryLower.includes(textLower)) score = Math.max(score, 80);
+  if (relaxedQuery && relaxedText && (relaxedText.includes(relaxedQuery) || relaxedQuery.includes(relaxedText))) score = Math.max(score, 60);
+  if (normalizedQuery && textPhone && (textPhone.includes(normalizedQuery) || normalizedQuery.includes(textPhone))) score = Math.max(score, 50);
+  if (isPhoneMatch(query, text) || isPhoneMatch(normalizedQuery, text)) score = Math.max(score, 90);
+  if (isLikelyPhoneQuery(query) && textPhone.endsWith(normalizedQuery)) score = Math.max(score, 95);
+
+  return score;
+}
+
 function hasMemberLikeText(value) {
   const text = cleanText(value);
   if (!text) return false;
@@ -893,19 +925,11 @@ async function openChat(queryValue) {
       rows: debugRows
     });
 
-    let matchedCell =
-      sidebarCells.find((cell) => {
-        const cellText = getChatRowSearchText(cell);
-        if (!cellText) return false;
-        const cellTextLower = cellText.toLowerCase();
-        if (cellTextLower.includes(normalizedQueryLower) || normalizedQueryLower.includes(cellTextLower)) return true;
-        const relaxedCellText = cellTextLower.replace(/[^a-z0-9]+/g, '');
-        if (relaxedQuery && relaxedCellText && (relaxedCellText.includes(relaxedQuery) || relaxedQuery.includes(relaxedCellText))) return true;
-        if (!normalizedQuery) return false;
-        const normalizedCellText = normalizePhone(cellText);
-        return Boolean(normalizedCellText && (normalizedCellText.includes(normalizedQuery) || normalizedQuery.includes(normalizedCellText)));
-      }) ||
-      (sidebarCells.length === 1 ? sidebarCells[0] : null);
+    const scoredMatches = sidebarCells
+      .map((cell) => ({ cell, score: scoreChatSearchMatch(query, normalizedQuery, normalizedQueryLower, relaxedQuery, getChatRowSearchText(cell)) }))
+      .filter((entry) => entry.score >= 0)
+      .sort((a, b) => b.score - a.score);
+    const matchedCell = scoredMatches[0]?.cell || (sidebarCells.length === 1 ? sidebarCells[0] : null);
 
     if (!matchedCell) {
       log('[Search][Results][NoMatch]', {
@@ -913,6 +937,10 @@ async function openChat(queryValue) {
         normalizedQuery,
         queryLower: normalizedQueryLower,
         relaxedQuery,
+        candidateScores: sidebarCells.map((cell) => ({
+          text: getChatRowSearchText(cell),
+          score: scoreChatSearchMatch(query, normalizedQuery, normalizedQueryLower, relaxedQuery, getChatRowSearchText(cell))
+        })),
         rows: debugRows
       });
       throw new Error(`No matching visible chat found for query: ${query}`);
