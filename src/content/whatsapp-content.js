@@ -63,7 +63,12 @@ const SELECTORS = {
     'footer [contenteditable="true"][data-tab="1"]',
     'footer div[role="textbox"][contenteditable="true"]'
   ],
-  sendButton: ['button[aria-label="Send"]', 'span[data-icon="send"]', 'button span[data-icon="send"]'],
+  sendButton: [
+    'button[aria-label="Send"]',
+    'button[data-testid="compose-btn-send"]',
+    'span[data-icon="send"]',
+    'button span[data-icon="send"]'
+  ],
   attachButton: ['button[title="Attach"]', 'div[aria-label="Attach"]', 'span[data-icon="plus-rounded"]'],
   fileInput: ['input[type="file"]', 'input[accept*="image"], input[accept*="video"], input[accept*="*/*"]'],
   chatHeaderClickable: ['header [title]', 'header h1', 'header [data-testid="conversation-info-header"]'],
@@ -251,9 +256,41 @@ function setEditableValue(el, value) {
   selection.addRange(range);
   document.execCommand('insertText', false, value);
   el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  el.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
 }
 
 async function waitForElement(selectors, timeoutMs = 25000, pollMs = 250, root = document) {
+  const immediate = queryWithFallback(selectors, root);
+  if (immediate) return immediate;
+
+  if (typeof MutationObserver === 'function') {
+    return await new Promise((resolve) => {
+      let resolved = false;
+      const timer = setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        observer.disconnect();
+        resolve(null);
+      }, timeoutMs);
+
+      const observer = new MutationObserver(() => {
+        const found = queryWithFallback(selectors, root);
+        if (!found || resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        observer.disconnect();
+        resolve(found);
+      });
+
+      observer.observe(root === document ? document.documentElement : root, {
+        childList: true,
+        subtree: true,
+        attributes: true
+      });
+    });
+  }
+
   const maxTries = Math.ceil(timeoutMs / pollMs);
   for (let i = 0; i < maxTries; i += 1) {
     const found = queryWithFallback(selectors, root);
@@ -553,6 +590,7 @@ async function openChatBySearch(queryValue) {
 
   setEditableValue(searchBox, query);
   await wait(600);
+  await waitForElement(SELECTORS.sidebarChatRows, 5000);
 
   const sideRows = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((row) => row.textContent?.trim());
   const normalizedQuery = query.toLowerCase();
@@ -595,12 +633,19 @@ async function setMessageAndSend(text) {
 
   const sendEl = queryWithFallback(SELECTORS.sendButton);
   if (sendEl) {
-    (sendEl.closest('button') || sendEl).click();
+    simulateUserClick(sendEl.closest('button') || sendEl);
   } else {
     box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   }
 
   await wait(900);
+}
+
+function simulateUserClick(node) {
+  if (!(node instanceof Element)) return;
+  ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+    node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: window }));
+  });
 }
 
 async function downloadAttachmentAsFile(url) {

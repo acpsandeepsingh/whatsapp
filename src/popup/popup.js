@@ -4,6 +4,7 @@ const ui = {
   primaryFilter: document.getElementById('primaryFilter'),
   secondaryFilter: document.getElementById('secondaryFilter'),
   fetchContactsBtn: document.getElementById('fetchContactsBtn'),
+  toggleAutomationBtn: document.getElementById('toggleAutomationBtn'),
   downloadContactsBtn: document.getElementById('downloadContactsBtn'),
   closePopupBtn: document.getElementById('closePopupBtn'),
   startFromStorageBtn: document.getElementById('startFromStorageBtn'),
@@ -16,6 +17,7 @@ const POPUP_STATE_KEY = 'popupUiState';
 let chatSnapshot = { groups: [], countryCodes: [] };
 let latestFetchedContacts = [];
 let latestIndexedDbRows = [];
+let automationRunning = false;
 
 const CHAT_SCOPE_OPTIONS = [
   { value: 'all_chats', label: 'All Chats' },
@@ -26,6 +28,18 @@ const CHAT_SCOPE_OPTIONS = [
 function setStatus(text, isError = false) {
   ui.statusText.textContent = text;
   ui.statusText.style.color = isError ? '#fecaca' : '#93c5fd';
+}
+
+function renderAutomationToggle() {
+  if (!ui.toggleAutomationBtn) return;
+  ui.toggleAutomationBtn.textContent = automationRunning ? 'Stop Sending' : 'Start Sending';
+  ui.toggleAutomationBtn.classList.toggle('secondary', automationRunning);
+}
+
+async function syncAutomationStateFromStorage() {
+  const stored = await chrome.storage.local.get(['isRunning']);
+  automationRunning = Boolean(stored.isRunning);
+  renderAutomationToggle();
 }
 
 async function persistPopupState() {
@@ -671,7 +685,34 @@ async function stopFetchAndClosePopup() {
   }
 }
 
+async function toggleAutomationRunState() {
+  if (!ui.toggleAutomationBtn) return;
+  ui.toggleAutomationBtn.disabled = true;
+
+  try {
+    if (automationRunning) {
+      const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.STOP_AUTOMATION));
+      if (!response?.success) throw new Error(response?.error || 'Unable to stop automation.');
+      automationRunning = false;
+      await chrome.storage.local.set({ isRunning: false });
+      setStatus('Stopping after current message...');
+    } else {
+      const response = await chrome.runtime.sendMessage(createMessage(ACTIONS.START_CAMPAIGN_FROM_STORAGE));
+      if (!response?.success) throw new Error(response?.error || 'Unable to start automation.');
+      automationRunning = true;
+      await chrome.storage.local.set({ isRunning: true });
+      setStatus('Automation started from saved rows.');
+    }
+    renderAutomationToggle();
+  } catch (error) {
+    setStatus(`Automation toggle failed: ${error.message || error}`, true);
+  } finally {
+    ui.toggleAutomationBtn.disabled = false;
+  }
+}
+
 ui.fetchContactsBtn.addEventListener('click', fetchContacts);
+ui.toggleAutomationBtn?.addEventListener('click', toggleAutomationRunState);
 ui.downloadContactsBtn?.addEventListener('click', async () => {
   if (ui.primaryFilter.value === 'all_contacts' && ui.secondaryFilter.value === 'all_chats') {
     const indexedRows = latestIndexedDbRows.length ? latestIndexedDbRows : deriveIndexedDbRowsFromFetchedContacts();
@@ -714,6 +755,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.settings?.newValue) {
     ui.latestLog.textContent = JSON.stringify({ settings: changes.settings.newValue }, null, 2);
   }
+  if (Object.prototype.hasOwnProperty.call(changes, 'isRunning')) {
+    automationRunning = Boolean(changes.isRunning?.newValue);
+    renderAutomationToggle();
+  }
 });
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -723,6 +768,14 @@ chrome.runtime.onMessage.addListener((message) => {
   if (action === ACTIONS.UPDATE_PROGRESS) {
     const latest = message.latest || {};
     setStatus(`Automation: ${latest.status || 'running'}`);
+    if (latest.status === 'completed' || latest.status === 'stopped') {
+      automationRunning = false;
+      chrome.storage.local.set({ isRunning: false });
+    } else if (latest.status === 'started' || latest.status === 'success' || latest.status === 'retrying') {
+      automationRunning = true;
+      chrome.storage.local.set({ isRunning: true });
+    }
+    renderAutomationToggle();
   }
 });
 
@@ -731,6 +784,7 @@ chrome.runtime.onMessage.addListener((message) => {
   ui.primaryFilter.value = ui.primaryFilter.value || 'all_contacts';
   refreshSecondaryFilter();
   await restorePopupState();
+  await syncAutomationStateFromStorage();
   await restoreRunningOrPreviousState();
   if (ui.primaryFilter.value === 'group' || !ui.secondaryFilter.options.length) {
     await fetchGroupsForSecondaryFilter();
