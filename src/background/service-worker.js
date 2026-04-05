@@ -478,6 +478,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       case ACTIONS.STOP_AUTOMATION: {
         state.stopRequested = true;
+        contactFetchState.running = false;
+        try {
+          await sendToContent(createMessage(ACTIONS.STOP_CONTACT_FETCH));
+        } catch (error) {
+          console.warn('[WA CRM][Background] STOP_CONTACT_FETCH relay failed during STOP_AUTOMATION', error?.message || error);
+        }
+        try {
+          await sendToContent(createMessage(ACTIONS.STOP_AUTOMATION));
+        } catch (error) {
+          console.warn('[WA CRM][Background] STOP_AUTOMATION relay to content failed', error?.message || error);
+        }
         await chrome.storage.local.set({ isRunning: false });
         sendResponse({ success: true, stopping: true });
         break;
