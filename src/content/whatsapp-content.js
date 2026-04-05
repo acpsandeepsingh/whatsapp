@@ -1229,9 +1229,10 @@ async function openChat(queryValue) {
       .filter((entry) => entry.score >= 0)
       .sort((a, b) => b.score - a.score);
     const matchedCell = scoredMatches[0]?.cell || (sidebarCells.length === 1 ? sidebarCells[0] : null);
+    const canUseFallbackSelection = !isLikelyPhoneQuery(variant.value) && !isLikelyPhoneQuery(query);
 
     if (!matchedCell) {
-      const fallbackCell = pickFallbackSearchResultCell(sidebarCells);
+      const fallbackCell = canUseFallbackSelection ? pickFallbackSearchResultCell(sidebarCells) : null;
       if (fallbackCell) {
         log('[Search][Results][FallbackSelect]', {
           query,
@@ -1278,6 +1279,13 @@ async function openChat(queryValue) {
           }
         }
         log('[Chat] Fallback click did not confirm chat switch', { query, variant });
+      }
+      if (!canUseFallbackSelection) {
+        log('[Search][Results][FallbackSkipped]', {
+          query,
+          variant,
+          reason: 'phone_query_requires_explicit_match'
+        });
       }
       log('[Search][Results][NoMatch]', {
         query,
