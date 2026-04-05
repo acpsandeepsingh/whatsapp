@@ -1341,6 +1341,16 @@ async function openChat(queryValue) {
   throw new Error(`Unable to open chat for query: ${query}`);
 }
 
+async function focusComposerAfterChatOpen(fallbackBox = null) {
+  const specificComposerSelector =
+    'div[role="textbox"].x1hx0egp.x6ikm8r.x1odjw0f.x1k6rcq7.x6prxxf[contenteditable="true"]';
+  const preferredComposer = queryWithFallback([specificComposerSelector]) || fallbackBox;
+  if (!(preferredComposer instanceof HTMLElement)) return;
+  preferredComposer.focus();
+  realClick(preferredComposer);
+  await wait(80);
+}
+
 async function confirmChatSwitched(expectedContact, timeoutMs = 12000, context = {}) {
   const expected = String(expectedContact || '').trim().toLowerCase();
   const expectedPhone = normalizePhone(expectedContact);
