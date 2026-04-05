@@ -358,6 +358,28 @@ async function waitForActiveMessageBox(timeoutMs = 16000, pollMs = 120) {
   return null;
 }
 
+async function activateMessageBox(timeoutMs = 8000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    assertRunning('activate-message-box');
+    const activeBox = getActiveMessageBox();
+    if (activeBox instanceof HTMLElement) {
+      activeBox.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+      await wait(80);
+      activeBox.focus();
+      realClick(activeBox);
+      await wait(120);
+      const refreshedBox = getActiveMessageBox();
+      if (refreshedBox instanceof HTMLElement) {
+        log('[Message] Composer activated', summarizeElementForLog(refreshedBox));
+        return refreshedBox;
+      }
+    }
+    await wait(120);
+  }
+  return null;
+}
+
 function normalizePhone(value) {
   return String(value || '').replace(/[^\d]/g, '');
 }
@@ -644,7 +666,7 @@ async function typeMessage(message, { delayPerChar = 45, confirmTimeoutMs = 1500
     const text = String(message || '');
     if (!text.trim()) throw new Error('Message is empty after template processing');
 
-    const box = await waitForActiveMessageBox(16000);
+    const box = (await activateMessageBox(6000)) || (await waitForActiveMessageBox(16000));
     if (!(box instanceof HTMLElement)) throw new Error('Message box is not editable.');
 
     clearEditableBox(box);
@@ -1275,7 +1297,7 @@ async function openChat(queryValue) {
           let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: fallbackRowText });
           if (!switched) switched = await confirmChatSwitched(query, 9500, { clickedRowText: fallbackRowText });
           if (switched) {
-            const messageBox = await waitForActiveMessageBox(16000);
+            const messageBox = (await activateMessageBox(6000)) || (await waitForActiveMessageBox(16000));
             if (messageBox) return messageBox;
           }
           log('[Chat] Fallback click did not confirm chat switch', { query, variant });
@@ -1318,7 +1340,7 @@ async function openChat(queryValue) {
       }
       switched = switched || (await confirmChatSwitched(variant.value, 9500, { clickedRowText: matchedRowText }));
       if (switched) {
-        const messageBox = await waitForActiveMessageBox(16000);
+        const messageBox = (await activateMessageBox(6000)) || (await waitForActiveMessageBox(16000));
         if (messageBox) return messageBox;
       }
       log('[Chat] Switch confirmation failed for attempt', { query, variant });
