@@ -465,6 +465,18 @@ function extractLikelyChatTitleFromRowText(rowText) {
   return cleanText(beforeTime.split(/\s{2,}/)[0] || beforeTime);
 }
 
+function getCurrentChatTitleText() {
+  const header = queryWithFallback(['header span[title]', ...SELECTORS.chatHeaderTitle]);
+  return cleanText(header?.getAttribute?.('title') || header?.textContent || '');
+}
+
+function didChatHeaderChange(previousTitle, currentTitle) {
+  const before = cleanText(previousTitle || '').toLowerCase();
+  const after = cleanText(currentTitle || '').toLowerCase();
+  if (!before || !after) return false;
+  return before !== after;
+}
+
 function isLikelyNonChatSidebarRow(cell, precomputedText = '') {
   if (!(cell instanceof HTMLElement)) return true;
   const text = cleanText(precomputedText || getChatRowSearchText(cell)).toLowerCase();
@@ -1227,15 +1239,33 @@ async function openChat(queryValue) {
           selectedText: getChatRowSearchText(fallbackCell)
         });
         assertRunning('open-chat-click-fallback');
+        const previousHeaderTitle = getCurrentChatTitleText();
+        const previousComposer = getActiveMessageBox();
         const clickableTarget = resolveChatClickableTarget(fallbackCell) || fallbackCell;
         const clickResult = await clickChatRow(clickableTarget);
         const fallbackRowText = getChatRowSearchText(fallbackCell);
         log('[Chat] Fallback chat clicked:', cleanText(fallbackCell.innerText || ''), 'clickResult=', clickResult);
         const messageBoxAfterClick = (await waitForActiveMessageBox(3500)) || (await activateMessageBox(1500));
         if (messageBoxAfterClick) {
-          log('[Chat] Fallback click opened composer without switch confirmation');
-          messageBoxAfterClick.focus();
-          return messageBoxAfterClick;
+          const currentHeaderTitle = getCurrentChatTitleText();
+          const switchedByHeader = didChatHeaderChange(previousHeaderTitle, currentHeaderTitle);
+          const switchedByComposer = previousComposer instanceof HTMLElement && previousComposer !== messageBoxAfterClick;
+          if (switchedByHeader || switchedByComposer) {
+            log('[Chat] Fallback click opened composer after switch signal', {
+              switchedByHeader,
+              switchedByComposer,
+              previousHeaderTitle,
+              currentHeaderTitle
+            });
+            messageBoxAfterClick.focus();
+            return messageBoxAfterClick;
+          }
+          log('[Chat] Fallback composer appeared but switch not confirmed yet', {
+            previousHeaderTitle,
+            currentHeaderTitle,
+            switchedByHeader,
+            switchedByComposer
+          });
         }
 
         let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: fallbackRowText });
@@ -1266,6 +1296,8 @@ async function openChat(queryValue) {
     }
 
     assertRunning('open-chat-click');
+    const previousHeaderTitle = getCurrentChatTitleText();
+    const previousComposer = getActiveMessageBox();
     const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
     const clickResult = await clickChatRow(clickableTarget);
     const matchedRowText = getChatRowSearchText(matchedCell);
@@ -1273,9 +1305,25 @@ async function openChat(queryValue) {
 
     const messageBoxAfterClick = (await waitForActiveMessageBox(3500)) || (await activateMessageBox(1500));
     if (messageBoxAfterClick) {
-      log('[Chat] Click opened composer without switch confirmation');
-      messageBoxAfterClick.focus();
-      return messageBoxAfterClick;
+      const currentHeaderTitle = getCurrentChatTitleText();
+      const switchedByHeader = didChatHeaderChange(previousHeaderTitle, currentHeaderTitle);
+      const switchedByComposer = previousComposer instanceof HTMLElement && previousComposer !== messageBoxAfterClick;
+      if (switchedByHeader || switchedByComposer) {
+        log('[Chat] Click opened composer after switch signal', {
+          switchedByHeader,
+          switchedByComposer,
+          previousHeaderTitle,
+          currentHeaderTitle
+        });
+        messageBoxAfterClick.focus();
+        return messageBoxAfterClick;
+      }
+      log('[Chat] Composer appeared but switch not confirmed yet', {
+        previousHeaderTitle,
+        currentHeaderTitle,
+        switchedByHeader,
+        switchedByComposer
+      });
     }
 
     let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: matchedRowText });
@@ -1310,8 +1358,7 @@ async function confirmChatSwitched(expectedContact, timeoutMs = 12000, context =
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     assertRunning('chat-confirm');
-    const header = queryWithFallback(['header span[title]', ...SELECTORS.chatHeaderTitle]);
-    const rawTitle = cleanText(header?.getAttribute?.('title') || header?.textContent || '');
+    const rawTitle = getCurrentChatTitleText();
     const title = rawTitle.toLowerCase();
     const titlePhone = normalizePhone(rawTitle);
     if (title && (title.includes(expected) || expected.includes(title) || (expectedPhone && titlePhone && (titlePhone.includes(expectedPhone) || expectedPhone.includes(titlePhone))))) {
