@@ -1296,7 +1296,8 @@ async function openChat(queryValue) {
         if (switched) {
           const messageBox = (await activateMessageBox(6000)) || (await waitForActiveMessageBox(16000));
           if (messageBox) {
-            await focusComposerAfterChatOpen(messageBox);
+            messageBox.focus();
+            realClick(messageBox);
             return messageBox;
           }
         }
@@ -1329,7 +1330,8 @@ async function openChat(queryValue) {
     if (switched) {
       const messageBox = (await activateMessageBox(6000)) || (await waitForActiveMessageBox(16000));
       if (messageBox) {
-        await focusComposerAfterChatOpen(messageBox);
+        messageBox.focus();
+        realClick(messageBox);
         return messageBox;
       }
     }
