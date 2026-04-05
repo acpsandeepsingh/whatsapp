@@ -562,23 +562,6 @@ function setInputValueByTyping(input, value) {
   input.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-async function humanTypeIntoInput(input, value, { minDelay = 50, maxDelay = 150 } = {}) {
-  if (!(input instanceof HTMLInputElement)) return;
-  input.focus();
-  input.value = '';
-  input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-
-  const text = String(value || '');
-  for (const char of text) {
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
-    input.value += char;
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
-    input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-    await wait(randomBetween(minDelay, maxDelay));
-  }
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
 function clearEditableBox(box) {
   if (!(box instanceof HTMLElement)) return;
   box.focus();
@@ -613,29 +596,11 @@ async function typeSearch(query) {
 
   log('[Search] Typing started:', value);
   if (searchBox instanceof HTMLInputElement) {
-    searchBox.focus();
-    searchBox.select();
-    searchBox.value = '';
-    searchBox.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-    for (const char of value) {
-      assertRunning('search-typing');
-      searchBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
-      searchBox.value += char;
-      searchBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
-      searchBox.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-      await wait(randomBetween(80, 150));
-    }
+    assertRunning('search-typing');
+    setInputValueByTyping(searchBox, value);
   } else {
-    clearEditableBox(searchBox);
-    searchBox.focus();
-    for (const char of value) {
-      assertRunning('search-typing');
-      searchBox.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
-      document.execCommand('insertText', false, char);
-      searchBox.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
-      searchBox.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-      await wait(randomBetween(80, 150));
-    }
+    assertRunning('search-typing');
+    setEditableValue(searchBox, value);
   }
   const typedValue =
     searchBox instanceof HTMLInputElement
@@ -1266,6 +1231,13 @@ async function openChat(queryValue) {
         const clickResult = await clickChatRow(clickableTarget);
         const fallbackRowText = getChatRowSearchText(fallbackCell);
         log('[Chat] Fallback chat clicked:', cleanText(fallbackCell.innerText || ''), 'clickResult=', clickResult);
+        const messageBoxAfterClick = (await waitForActiveMessageBox(3500)) || (await activateMessageBox(1500));
+        if (messageBoxAfterClick) {
+          log('[Chat] Fallback click opened composer without switch confirmation');
+          messageBoxAfterClick.focus();
+          return messageBoxAfterClick;
+        }
+
         let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: fallbackRowText });
         if (!switched) switched = await confirmChatSwitched(query, 9500, { clickedRowText: fallbackRowText });
         if (switched) {
@@ -1298,6 +1270,13 @@ async function openChat(queryValue) {
     const clickResult = await clickChatRow(clickableTarget);
     const matchedRowText = getChatRowSearchText(matchedCell);
     log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''), 'clickResult=', clickResult);
+
+    const messageBoxAfterClick = (await waitForActiveMessageBox(3500)) || (await activateMessageBox(1500));
+    if (messageBoxAfterClick) {
+      log('[Chat] Click opened composer without switch confirmation');
+      messageBoxAfterClick.focus();
+      return messageBoxAfterClick;
+    }
 
     let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: matchedRowText });
     switched = switched || (await confirmChatSwitched(variant.value, 9500, { clickedRowText: matchedRowText }));
