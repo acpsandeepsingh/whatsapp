@@ -44,6 +44,8 @@ const ui = {
 let rows = [];
 let pendingImportFile = null;
 let pendingImportPreviewRows = [];
+const progressEventHistory = [];
+const MAX_PROGRESS_HISTORY = 25;
 let chatSnapshot = {
   chats: [],
   groups: [],
@@ -207,9 +209,18 @@ function renderProgress(progress, latest = null) {
   ui.progressBar.value = percent;
   ui.progressLine.textContent = `State: ${state} | Total: ${total} | Sent: ${sent} | Failed: ${failed} | Pending: ${pending}`;
 
-  if (latest) {
-    ui.latestLog.textContent = JSON.stringify(latest, null, 2);
+  if (latest && typeof latest === 'object') {
+    progressEventHistory.unshift({
+      at: new Date().toISOString(),
+      ...latest
+    });
+    if (progressEventHistory.length > MAX_PROGRESS_HISTORY) {
+      progressEventHistory.length = MAX_PROGRESS_HISTORY;
+    }
+    ui.latestLog.textContent = progressEventHistory.map((entry) => JSON.stringify(entry)).join('\n');
     applyLiveStatusUpdate(latest);
+  } else if (!progressEventHistory.length) {
+    ui.latestLog.textContent = 'No activity yet.';
   }
 }
 
