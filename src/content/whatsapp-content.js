@@ -1237,115 +1237,105 @@ async function openChat(queryValue) {
   const query = String(queryValue || '').trim();
   if (!query) throw new Error('Missing contact/group search query.');
 
-  const queryVariants = getSearchQueryVariants(query);
+  const queryVariants = [{ value: query, reason: 'exact' }];
   log('[Chat] Opening chat:', query);
   log('[Chat] Query variants:', queryVariants);
   await ensureWhatsAppReady();
-  let globalAttempt = 0;
   for (const variant of queryVariants) {
-    for (let variantAttempt = 1; variantAttempt <= 3; variantAttempt += 1) {
-      globalAttempt += 1;
-      assertRunning('open-chat-attempt');
-      log(`[Chat] Attempt ${globalAttempt} (variant #${variantAttempt}, reason=${variant.reason}) for ${variant.value}`);
-      await typeSearch(variant.value);
-      await waitForSearchResults(10000);
-      const variantLower = variant.value.toLowerCase();
-      const variantNormalized = normalizePhone(variant.value);
-      const variantRelaxed = variantLower.replace(/[^a-z0-9]+/g, '');
-      const sidebarCells = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((cell) => {
-        if (!(cell instanceof HTMLElement)) return false;
-        if (cell.hidden) return false;
-        const style = window.getComputedStyle(cell);
-        if (style.display === 'none' || style.visibility === 'hidden') return false;
-        const rect = cell.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      });
-      if (!sidebarCells.length) throw new Error('No visible sidebar chat item found');
-      const debugRows = collectSidebarSearchDebugData(sidebarCells);
-      log('[Search][Results] Visible rows:', debugRows.length);
-      log('[Search][Results][Data]', {
+    assertRunning('open-chat-attempt');
+    log(`[Chat] Attempt 1 (reason=${variant.reason}) for ${variant.value}`);
+    await typeSearch(variant.value);
+    await waitForSearchResults(10000);
+    const variantLower = variant.value.toLowerCase();
+    const variantNormalized = normalizePhone(variant.value);
+    const variantRelaxed = variantLower.replace(/[^a-z0-9]+/g, '');
+    const sidebarCells = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((cell) => {
+      if (!(cell instanceof HTMLElement)) return false;
+      if (cell.hidden) return false;
+      const style = window.getComputedStyle(cell);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = cell.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+    if (!sidebarCells.length) throw new Error('No visible sidebar chat item found');
+    const debugRows = collectSidebarSearchDebugData(sidebarCells);
+    log('[Search][Results] Visible rows:', debugRows.length);
+    log('[Search][Results][Data]', {
+      query,
+      variant,
+      normalizedQuery: variantNormalized,
+      queryLower: variantLower,
+      relaxedQuery: variantRelaxed,
+      rows: debugRows
+    });
+
+    const scoredMatches = sidebarCells
+      .map((cell) => ({
+        cell,
+        score: scoreChatSearchMatch(variant.value, variantNormalized, variantLower, variantRelaxed, getChatRowSearchText(cell))
+      }))
+      .filter((entry) => entry.score >= 0)
+      .sort((a, b) => b.score - a.score);
+    const matchedCell = scoredMatches[0]?.cell || (sidebarCells.length === 1 ? sidebarCells[0] : null);
+
+    if (!matchedCell) {
+      const fallbackCell = pickFallbackSearchResultCell(sidebarCells);
+      if (fallbackCell) {
+        log('[Search][Results][FallbackSelect]', {
+          query,
+          variant,
+          selectedText: getChatRowSearchText(fallbackCell)
+        });
+        assertRunning('open-chat-click-fallback');
+        const clickableTarget = resolveChatClickableTarget(fallbackCell) || fallbackCell;
+        const clickResult = await clickChatRow(clickableTarget);
+        const fallbackRowText = getChatRowSearchText(fallbackCell);
+        log('[Chat] Fallback chat clicked:', cleanText(fallbackCell.innerText || ''), 'clickResult=', clickResult);
+        let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: fallbackRowText });
+        if (!switched) switched = await confirmChatSwitched(query, 9500, { clickedRowText: fallbackRowText });
+        if (switched) {
+          const messageBox = (await activateMessageBox(6000)) || (await waitForActiveMessageBox(16000));
+          if (messageBox) {
+            messageBox.focus();
+            realClick(messageBox);
+            return messageBox;
+          }
+        }
+        log('[Chat] Fallback click did not confirm chat switch', { query, variant });
+      }
+      log('[Search][Results][NoMatch]', {
         query,
         variant,
         normalizedQuery: variantNormalized,
         queryLower: variantLower,
         relaxedQuery: variantRelaxed,
+        candidateScores: sidebarCells.map((cell) => ({
+          text: getChatRowSearchText(cell),
+          score: scoreChatSearchMatch(variant.value, variantNormalized, variantLower, variantRelaxed, getChatRowSearchText(cell))
+        })),
         rows: debugRows
       });
-
-      const scoredMatches = sidebarCells
-        .map((cell) => ({
-          cell,
-          score: scoreChatSearchMatch(variant.value, variantNormalized, variantLower, variantRelaxed, getChatRowSearchText(cell))
-        }))
-        .filter((entry) => entry.score >= 0)
-        .sort((a, b) => b.score - a.score);
-      const matchedCell = scoredMatches[0]?.cell || (sidebarCells.length === 1 ? sidebarCells[0] : null);
-
-      if (!matchedCell) {
-        const fallbackCell = pickFallbackSearchResultCell(sidebarCells);
-        if (fallbackCell) {
-          log('[Search][Results][FallbackSelect]', {
-            query,
-            variant,
-            selectedText: getChatRowSearchText(fallbackCell)
-          });
-          assertRunning('open-chat-click-fallback');
-          const clickableTarget = resolveChatClickableTarget(fallbackCell) || fallbackCell;
-          const clickResult = await clickChatRow(clickableTarget);
-          const fallbackRowText = getChatRowSearchText(fallbackCell);
-          log('[Chat] Fallback chat clicked:', cleanText(fallbackCell.innerText || ''), 'clickResult=', clickResult);
-          let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: fallbackRowText });
-          if (!switched) switched = await confirmChatSwitched(query, 9500, { clickedRowText: fallbackRowText });
-          if (switched) {
-            const messageBox = (await activateMessageBox(6000)) || (await waitForActiveMessageBox(16000));
-            if (messageBox) return messageBox;
-          }
-          log('[Chat] Fallback click did not confirm chat switch', { query, variant });
-        }
-        log('[Search][Results][NoMatch]', {
-          query,
-          variant,
-          normalizedQuery: variantNormalized,
-          queryLower: variantLower,
-          relaxedQuery: variantRelaxed,
-          candidateScores: sidebarCells.map((cell) => ({
-            text: getChatRowSearchText(cell),
-            score: scoreChatSearchMatch(variant.value, variantNormalized, variantLower, variantRelaxed, getChatRowSearchText(cell))
-          })),
-          rows: debugRows
-        });
-        log('[Chat][Attempt] No matched row, trying next variant/attempt');
-        if (variantAttempt < 3) {
-          await wait(600);
-          continue;
-        }
-        break;
-      }
-
-      assertRunning('open-chat-click');
-      const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
-      const clickResult = await clickChatRow(clickableTarget);
-      const matchedRowText = getChatRowSearchText(matchedCell);
-      log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''), 'clickResult=', clickResult);
-
-      let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: matchedRowText });
-      if (!switched) {
-        log('[Chat] Primary click not confirmed, retrying click + enter fallback');
-        await clickChatRow(clickableTarget);
-        const active = document.activeElement;
-        if (active instanceof HTMLElement) {
-          active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-          active.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        }
-      }
-      switched = switched || (await confirmChatSwitched(variant.value, 9500, { clickedRowText: matchedRowText }));
-      if (switched) {
-        const messageBox = (await activateMessageBox(6000)) || (await waitForActiveMessageBox(16000));
-        if (messageBox) return messageBox;
-      }
-      log('[Chat] Switch confirmation failed for attempt', { query, variant });
-      if (variantAttempt < 3) await wait(800);
+      log('[Chat][Attempt] No matched row');
+      break;
     }
+
+    assertRunning('open-chat-click');
+    const clickableTarget = resolveChatClickableTarget(matchedCell) || matchedCell;
+    const clickResult = await clickChatRow(clickableTarget);
+    const matchedRowText = getChatRowSearchText(matchedCell);
+    log('[Chat] Chat clicked:', cleanText(matchedCell.innerText || ''), 'clickResult=', clickResult);
+
+    let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: matchedRowText });
+    switched = switched || (await confirmChatSwitched(variant.value, 9500, { clickedRowText: matchedRowText }));
+    if (switched) {
+      const messageBox = (await activateMessageBox(6000)) || (await waitForActiveMessageBox(16000));
+      if (messageBox) {
+        messageBox.focus();
+        realClick(messageBox);
+        return messageBox;
+      }
+    }
+    log('[Chat] Switch confirmation failed for attempt', { query, variant });
   }
 
   throw new Error(`Unable to open chat for query: ${query}`);
@@ -1957,6 +1947,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       case ACTIONS.STOP_AUTOMATION: {
         isRunning = false;
+        contactFetchRuntime.stopRequested = true;
         log('[STOP] STOP triggered from popup/background');
         await chrome.storage.local.set({ isRunning: false });
         sendResponse({ success: true, stopped: true });
@@ -1970,6 +1961,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       case ACTIONS.RESUME_AUTOMATION: {
         isRunning = true;
+        contactFetchRuntime.stopRequested = false;
         await chrome.storage.local.set({ isRunning: true });
         sendResponse({ success: true, resumed: true });
         break;
