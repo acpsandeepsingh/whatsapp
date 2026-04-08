@@ -585,6 +585,15 @@ function getEditableText(box) {
   return String(box?.innerText || '').replace(/\r/g, '');
 }
 
+function normalizeMessageText(value) {
+  return String(value || '')
+    .replace(/\u00A0/g, ' ')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function isInterruptedError(error) {
   return error?.name === 'AutomationInterruptedError' || /interrupted/i.test(String(error?.message || ''));
 }
@@ -1344,10 +1353,21 @@ async function sendMessageSafe() {
   const box = getActiveMessageBox();
   if (!(box instanceof HTMLElement)) throw new Error('Message box not found');
   await wait(200);
+
+  const sendButtonCandidate = queryWithFallback(SELECTORS.sendButton, box.closest('footer') || document);
+  const sendButton = sendButtonCandidate instanceof HTMLElement ? sendButtonCandidate.closest('button') || sendButtonCandidate : null;
+  if (sendButton instanceof HTMLElement && !sendButton.hasAttribute('disabled') && isVisibleElement(sendButton)) {
+    realClick(sendButton);
+    sendButton.click?.();
+    log('[Message] Send action fired (button)');
+    await wait(900);
+    return;
+  }
+
   assertRunning('send-enter');
   box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
   box.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-  log('[Message] Send action fired');
+  log('[Message] Send action fired (enter fallback)');
   await wait(900);
 }
 
@@ -1362,8 +1382,13 @@ async function setMessageAndSend(text) {
     assertRunning('send-protection');
   }
   const latestBox = getActiveMessageBox();
-  const latestText = getEditableText(latestBox);
-  if (latestText !== message) throw new Error('Send blocked because message text is not fully typed.');
+  const latestText = normalizeMessageText(getEditableText(latestBox));
+  const expectedMessage = normalizeMessageText(message);
+  if (latestText !== expectedMessage) {
+    throw new Error(
+      `Send blocked because message text is not fully typed. expected="${expectedMessage}" actual="${latestText}"`
+    );
+  }
   await sendMessageSafe();
 }
 
