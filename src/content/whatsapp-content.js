@@ -1189,7 +1189,13 @@ async function openChat(queryValue) {
   const query = String(queryValue || '').trim();
   if (!query) throw new Error('Missing contact/group search query.');
 
-  const queryVariants = [{ value: query, reason: 'exact' }];
+  const queryVariants = getSearchQueryVariants(query).map((variant, index) => ({
+    ...variant,
+    attempt: index + 1
+  }));
+  if (!queryVariants.length) {
+    queryVariants.push({ value: query, reason: 'exact', attempt: 1 });
+  }
   log('[Chat] Opening chat:', query);
   log('[Chat] Query variants:', queryVariants);
   await ensureWhatsAppReady();
@@ -1794,10 +1800,33 @@ async function scrapeGroupContacts(groupName, options = {}) {
   return [...uniqueByPhone.values()];
 }
 
-async function sendSingleMessage({ srNo, phone, message, attachmentUrl, attachmentSendingEnabled = true }) {
+async function sendSingleMessage({ srNo, phone, message, attachmentUrl, attachmentSendingEnabled = true, rawRow = {} }) {
   log('Processing row', srNo, phone);
   log('Loop started');
-  await openChatByPhone(phone);
+
+  const openChatErrors = [];
+  const chatQueries = [
+    normalizePhone(phone),
+    cleanText(rawRow.mobileNumber || rawRow.mobile || ''),
+    cleanText(rawRow.name || rawRow.contactName || '')
+  ].filter(Boolean);
+
+  let opened = false;
+  for (const query of chatQueries) {
+    try {
+      if (isLikelyPhoneQuery(query)) await openChatByPhone(query);
+      else await openChatBySearch(query);
+      opened = true;
+      break;
+    } catch (error) {
+      openChatErrors.push(`${query}: ${error?.message || error}`);
+      log('[Chat] Open attempt failed', { srNo, query, error: error?.message || error });
+    }
+  }
+
+  if (!opened) {
+    throw new Error(`Unable to open chat. Attempts: ${openChatErrors.join(' | ') || 'none'}`);
+  }
 
   if (attachmentSendingEnabled && attachmentUrl) {
     try {
