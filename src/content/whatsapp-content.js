@@ -1970,6 +1970,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.OPEN_CHAT: {
+        isRunning = true;
+        await chrome.storage.local.set({ isRunning: true });
         await withLock('automation', async () => {
           await waitForTypingLock('open-chat-action-wait');
           await openChatBySearch(message.query || message.phone || '');
@@ -1978,6 +1980,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case ACTIONS.SEND_MESSAGE: {
+        isRunning = true;
+        await chrome.storage.local.set({ isRunning: true });
         const result = await withLock('automation', async () => sendSingleMessage(message.data || {}));
         sendResponse(result);
         break;
