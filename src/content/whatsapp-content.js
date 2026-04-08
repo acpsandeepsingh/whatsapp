@@ -1203,18 +1203,10 @@ async function openChat(queryValue) {
     assertRunning('open-chat-attempt');
     log(`[Chat] Attempt 1 (reason=${variant.reason}) for ${variant.value}`);
     await typeSearch(variant.value);
-    await waitForSearchResults(10000);
+    const sidebarCells = await waitForSearchResults(10000);
     const variantLower = variant.value.toLowerCase();
     const variantNormalized = normalizePhone(variant.value);
     const variantRelaxed = variantLower.replace(/[^a-z0-9]+/g, '');
-    const sidebarCells = queryAllWithFallback(SELECTORS.sidebarChatRows).filter((cell) => {
-      if (!(cell instanceof HTMLElement)) return false;
-      if (cell.hidden) return false;
-      const style = window.getComputedStyle(cell);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
-      const rect = cell.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    });
     if (!sidebarCells.length) throw new Error('No visible sidebar chat item found');
     const debugRows = collectSidebarSearchDebugData(sidebarCells);
     log('[Search][Results] Visible rows:', debugRows.length);
@@ -1235,64 +1227,13 @@ async function openChat(queryValue) {
       .filter((entry) => entry.score >= 0)
       .sort((a, b) => b.score - a.score);
     const matchedCell = scoredMatches[0]?.cell || (sidebarCells.length === 1 ? sidebarCells[0] : null);
-    const canUseFallbackSelection = !isLikelyPhoneQuery(variant.value) && !isLikelyPhoneQuery(query);
 
     if (!matchedCell) {
-      const fallbackCell = canUseFallbackSelection ? pickFallbackSearchResultCell(sidebarCells) : null;
-      if (fallbackCell) {
-        log('[Search][Results][FallbackSelect]', {
-          query,
-          variant,
-          selectedText: getChatRowSearchText(fallbackCell)
-        });
-        assertRunning('open-chat-click-fallback');
-        const previousHeaderTitle = getCurrentChatTitleText();
-        const previousComposer = getActiveMessageBox();
-        const clickableTarget = resolveChatClickableTarget(fallbackCell) || fallbackCell;
-        const clickResult = await clickChatRow(clickableTarget);
-        const fallbackRowText = getChatRowSearchText(fallbackCell);
-        log('[Chat] Fallback chat clicked:', cleanText(fallbackCell.innerText || ''), 'clickResult=', clickResult);
-        const messageBoxAfterClick = (await waitForActiveMessageBox(3500)) || (await activateMessageBox(1500));
-        if (messageBoxAfterClick) {
-          const currentHeaderTitle = getCurrentChatTitleText();
-          const switchedByHeader = didChatHeaderChange(previousHeaderTitle, currentHeaderTitle);
-          const switchedByComposer = previousComposer instanceof HTMLElement && previousComposer !== messageBoxAfterClick;
-          if (switchedByHeader || switchedByComposer) {
-            log('[Chat] Fallback click opened composer after switch signal', {
-              switchedByHeader,
-              switchedByComposer,
-              previousHeaderTitle,
-              currentHeaderTitle
-            });
-            messageBoxAfterClick.focus();
-            return messageBoxAfterClick;
-          }
-          log('[Chat] Fallback composer appeared but switch not confirmed yet', {
-            previousHeaderTitle,
-            currentHeaderTitle,
-            switchedByHeader,
-            switchedByComposer
-          });
-        }
-
-        let switched = await confirmChatSwitched(variant.value, 3200, { clickedRowText: fallbackRowText });
-        if (!switched) switched = await confirmChatSwitched(query, 9500, { clickedRowText: fallbackRowText });
-        if (switched) {
-          const messageBox = await waitForActiveMessageBox(16000);
-          if (messageBox) {
-            messageBox.focus();
-            return messageBox;
-          }
-        }
-        log('[Chat] Fallback click did not confirm chat switch', { query, variant });
-      }
-      if (!canUseFallbackSelection) {
-        log('[Search][Results][FallbackSkipped]', {
-          query,
-          variant,
-          reason: 'phone_query_requires_explicit_match'
-        });
-      }
+      log('[Search][Results][FallbackSkipped]', {
+        query,
+        variant,
+        reason: 'strict_match_required'
+      });
       log('[Search][Results][NoMatch]', {
         query,
         variant,
