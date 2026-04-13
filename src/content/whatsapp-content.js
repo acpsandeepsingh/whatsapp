@@ -1349,13 +1349,29 @@ async function openChatByPhone(phone) {
 }
 
 async function openChatWithPrefilledText(phone, text = '') {
-  await openChatByPhone(phone);
+  const normalized = normalizePhone(phone);
+  if (!normalized) throw new Error('Invalid phone number');
 
   const message = String(text || '').trim();
-  if (!message) return null;
+  if (!message) {
+    await openChatByPhone(normalized);
+    return getActiveMessageBox();
+  }
 
-  await setMessageAndSend(message);
-  return getActiveMessageBox();
+  const encodedMessage = encodeURIComponent(message);
+  const deepLink = `https://api.whatsapp.com/send?phone=${normalized}&text=${encodedMessage}`;
+  window.location.assign(deepLink);
+
+  await wait(1200);
+  const messageBox = await waitForActiveMessageBox(20000);
+  if (!(messageBox instanceof HTMLElement)) {
+    throw new Error('Message box not available after opening chat with prefilled text');
+  }
+
+  messageBox.focus();
+  await wait(150);
+  await sendMessageSafe();
+  return messageBox;
 }
 
 async function sendMessageSafe() {
