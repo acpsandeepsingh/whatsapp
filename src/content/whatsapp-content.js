@@ -1345,6 +1345,16 @@ async function openChatBySearch(queryValue) {
 async function openChatByPhone(phone) {
   const normalized = normalizePhone(phone);
   if (!normalized) throw new Error('Invalid phone number');
+  const deepLink = `https://api.whatsapp.com/send?phone=${normalized}`;
+  window.location.assign(deepLink);
+
+  await wait(1200);
+  const messageBox = await waitForActiveMessageBox(20000);
+  if (messageBox instanceof HTMLElement) {
+    return messageBox;
+  }
+
+  log('[Chat] Deep-link open failed, falling back to sidebar search', normalized);
   return openChat(normalized);
 }
 
