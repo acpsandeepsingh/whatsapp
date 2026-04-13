@@ -1405,7 +1405,6 @@ async function sendMessageSafe() {
   const sendButton = sendButtonCandidate instanceof HTMLElement ? sendButtonCandidate.closest('button') || sendButtonCandidate : null;
   if (sendButton instanceof HTMLElement && !sendButton.hasAttribute('disabled') && isVisibleElement(sendButton)) {
     realClick(sendButton);
-    sendButton.click?.();
     log('[Message] Send action fired (button)');
     await wait(900);
     return;
@@ -1477,19 +1476,31 @@ function realClick(node) {
   return true;
 }
 
-async function downloadAttachmentAsFile(url) {
-  const response = await fetch(url, { method: 'GET', credentials: 'omit' });
+function getSafeAttachmentFileName(candidateName, fallbackExtension = 'bin') {
+  const fallbackBase = `attachment-${Date.now()}`;
+  const normalized = String(candidateName || '').trim().replace(/[/\\?%*:|"<>]/g, '-');
+  if (!normalized) return `${fallbackBase}.${fallbackExtension}`;
+
+  const trimmed = normalized.slice(0, 120);
+  if (trimmed.includes('.')) return trimmed;
+  return `${trimmed}.${fallbackExtension}`;
+}
+
+async function downloadAttachmentAsFile(url, preferredFileName = '') {
+  const sourceUrl = String(url || '').trim();
+  const response = await fetch(sourceUrl, { method: 'GET', credentials: 'omit' });
   if (!response.ok) {
     throw new Error(`Attachment download failed (${response.status})`);
   }
 
   const blob = await response.blob();
-  let fileName = `attachment-${Date.now()}.${blob.type.split('/')[1] || 'bin'}`;
+  const extension = blob.type.split('/')[1] || 'bin';
+  let fileName = getSafeAttachmentFileName(preferredFileName, extension);
 
-  if (!String(url).startsWith('data:')) {
-    const parsed = new URL(url, window.location.href);
+  if (!sourceUrl.startsWith('data:') && !preferredFileName) {
+    const parsed = new URL(sourceUrl, window.location.href);
     const pathname = parsed.pathname.split('/').pop() || `attachment-${Date.now()}`;
-    fileName = pathname.includes('.') ? pathname : `${pathname}.${blob.type.split('/')[1] || 'bin'}`;
+    fileName = getSafeAttachmentFileName(pathname, extension);
   }
 
   return new File([blob], fileName, {
@@ -1843,7 +1854,10 @@ async function sendSingleMessage({ srNo, phone, message, attachmentUrl, attachme
 
   if (attachmentSendingEnabled && attachmentUrl) {
     try {
-      const file = await downloadAttachmentAsFile(attachmentUrl);
+      const file = await downloadAttachmentAsFile(
+        attachmentUrl,
+        rawRow.local_attachment_name || rawRow.localAttachmentName || ''
+      );
       await uploadAndSendAttachment(file);
       if (message?.trim()) {
         await wait(700);
