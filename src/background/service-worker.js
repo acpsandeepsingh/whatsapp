@@ -442,7 +442,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       case ACTIONS.OPEN_CHAT: {
         const result = await sendToContent(
-          createMessage(ACTIONS.OPEN_CHAT, { query: message.query || message.phone || '' })
+          createMessage(ACTIONS.OPEN_CHAT, {
+            query: message.query || message.phone || '',
+            phone: message.phone || '',
+            text: message.text || message.message || ''
+          })
         );
         sendResponse(result);
         break;
