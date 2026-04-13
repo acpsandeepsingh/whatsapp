@@ -1356,8 +1356,8 @@ function openWhatsAppDeepLinkInSameTab(url) {
 async function openChatByPhone(phone) {
   const normalized = normalizePhone(phone);
   if (!normalized) throw new Error('Invalid phone number');
-  const deepLink = `https://web.whatsapp.com/send?phone=${normalized}`;
-  openWhatsAppDeepLinkInSameTab(deepLink);
+  const deepLink = `https://api.whatsapp.com/send?phone=${normalized}`;
+  window.location.assign(deepLink);
 
   await wait(1200);
   const messageBox = await waitForActiveMessageBox(20000);
@@ -1380,7 +1380,7 @@ async function openChatWithPrefilledText(phone, text = '') {
   }
 
   const encodedMessage = encodeURIComponent(message);
-  const deepLink = `https://web.whatsapp.com/send?phone=${normalized}&text=${encodedMessage}`;
+  const deepLink = `https://api.whatsapp.com/send?phone=${normalized}&text=${encodedMessage}`;
   openWhatsAppDeepLinkInSameTab(deepLink);
 
   await wait(1200);
