@@ -1348,6 +1348,16 @@ async function openChatByPhone(phone) {
   return openChat(normalized);
 }
 
+async function openChatWithPrefilledText(phone, text = '') {
+  await openChatByPhone(phone);
+
+  const message = String(text || '').trim();
+  if (!message) return null;
+
+  await setMessageAndSend(message);
+  return getActiveMessageBox();
+}
+
 async function sendMessageSafe() {
   assertRunning('send-before');
   const box = getActiveMessageBox();
@@ -1940,7 +1950,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         await chrome.storage.local.set({ isRunning: true });
         await withLock('automation', async () => {
           await waitForTypingLock('open-chat-action-wait');
-          await openChatBySearch(message.query || message.phone || '');
+          const query = message.query || message.phone || '';
+          const text = message.text || message.message || '';
+
+          if (message.phone && text) {
+            await openChatWithPrefilledText(message.phone, text);
+            return;
+          }
+
+          await openChatBySearch(query);
+          if (text) {
+            await setMessageAndSend(text);
+          }
         });
         sendResponse({ success: true });
         break;
