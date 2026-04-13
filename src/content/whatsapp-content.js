@@ -1342,9 +1342,30 @@ async function openChatBySearch(queryValue) {
   return openChat(queryValue);
 }
 
+function openWhatsAppDeepLinkInSameTab(url) {
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.target = '_self';
+  anchor.rel = 'noopener noreferrer';
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
 async function openChatByPhone(phone) {
   const normalized = normalizePhone(phone);
   if (!normalized) throw new Error('Invalid phone number');
+  const deepLink = `https://web.whatsapp.com/send?phone=${normalized}`;
+  openWhatsAppDeepLinkInSameTab(deepLink);
+
+  await wait(1200);
+  const messageBox = await waitForActiveMessageBox(20000);
+  if (messageBox instanceof HTMLElement) {
+    return messageBox;
+  }
+
+  log('[Chat] Deep-link open failed, falling back to sidebar search', normalized);
   return openChat(normalized);
 }
 
@@ -1359,8 +1380,8 @@ async function openChatWithPrefilledText(phone, text = '') {
   }
 
   const encodedMessage = encodeURIComponent(message);
-  const deepLink = `https://api.whatsapp.com/send?phone=${normalized}&text=${encodedMessage}`;
-  window.location.assign(deepLink);
+  const deepLink = `https://web.whatsapp.com/send?phone=${normalized}&text=${encodedMessage}`;
+  openWhatsAppDeepLinkInSameTab(deepLink);
 
   await wait(1200);
   const messageBox = await waitForActiveMessageBox(20000);
