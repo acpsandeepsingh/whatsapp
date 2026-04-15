@@ -66,6 +66,40 @@ function toDigits(value) {
   return String(value || '').replace(/[^\d]/g, '');
 }
 
+function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function isAudioLikeUrl(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (normalized.startsWith('data:audio/')) return true;
+  return /\.(mp3|m4a|wav|ogg|aac|flac|opus)(\?|#|$)/i.test(normalized);
+}
+
+function buildAudioIframeMarkup(url = '', rowIndex = 0) {
+  const safeSrc = escapeHtml(url);
+  return `
+    <iframe
+      title="Audio preview row ${rowIndex + 1}"
+      loading="lazy"
+      sandbox="allow-same-origin"
+      srcdoc="<style>html,body{margin:0;background:#0b1220;color:#cbd5e1;font-family:Arial,sans-serif}audio{width:100%;min-height:56px}p{margin:8px;font-size:12px}</style><audio controls preload='metadata' src='${safeSrc}'></audio><p>Audio keeps playing while dashboard tab is minimized (browser policy allowing).</p>"
+    ></iframe>
+  `;
+}
+
+async function copyToClipboard(text = '') {
+  const normalized = String(text || '').trim();
+  if (!normalized) throw new Error('Nothing to copy.');
+  await navigator.clipboard.writeText(normalized);
+}
+
 function defaultRow() {
   return {
     id: uid(),
@@ -114,6 +148,9 @@ function renderRows() {
   rows.forEach((row, index) => {
     const tr = document.createElement('tr');
     const phoneValid = validatePhone(row.mobileNumber || '');
+    const audioPreviewHtml = isAudioLikeUrl(row.attachmentUrl)
+      ? buildAudioIframeMarkup(row.attachmentUrl, index)
+      : '<span class="muted">No audio detected</span>';
 
     tr.innerHTML = `
       <td contenteditable="true" data-index="${index}" data-field="srNo">${row.srNo ?? index + 1}</td>
@@ -121,8 +158,10 @@ function renderRows() {
       <td contenteditable="true" data-index="${index}" data-field="name">${row.name || ''}</td>
       <td contenteditable="true" data-index="${index}" data-field="messageTemplate">${row.messageTemplate || ''}</td>
       <td contenteditable="true" data-index="${index}" data-field="attachmentUrl">${row.attachmentUrl || ''}</td>
+      <td class="audio-preview-cell">${audioPreviewHtml}</td>
       <td><span class="status-pill ${(row.status || 'Pending').toLowerCase()}">${row.status || 'Pending'}${phoneValid ? '' : ' (Invalid Number)'}</span></td>
       <td>
+        <button data-action="copy-attachment" data-index="${index}" class="secondary">Copy URL</button>
         <button data-action="attach-local" data-index="${index}" class="secondary">Attach Local</button>
         <button data-action="delete-row" data-index="${index}" class="danger">Delete</button>
       </td>
@@ -518,26 +557,41 @@ ui.rowsTableBody.addEventListener('click', async (event) => {
     return;
   }
 
+  if (action === 'copy-attachment') {
+    try {
+      await copyToClipboard(rows[index].attachmentUrl || '');
+      setStatus(`Attachment copied for row ${index + 1}.`);
+    } catch (error) {
+      setStatus(`Copy failed: ${error.message || 'Unknown error'}`, true);
+    }
+    return;
+  }
+
   if (action === 'attach-local') {
     const picker = document.createElement('input');
     picker.type = 'file';
-    picker.accept = '*/*';
+    picker.accept = '*/*,audio/*';
     picker.addEventListener('change', async () => {
       const file = picker.files?.[0];
       if (!file) return;
 
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(new Error('Failed reading local file'));
-        reader.readAsDataURL(file);
-      });
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('Failed reading local file'));
+          reader.readAsDataURL(file);
+        });
 
-      rows[index].attachmentUrl = String(dataUrl);
-      rows[index].raw = { ...(rows[index].raw || {}), local_attachment_name: file.name };
-      await saveRows();
-      renderRows();
-      setStatus(`Local file attached for row ${index + 1}: ${file.name}`);
+        rows[index].attachmentUrl = String(dataUrl);
+        rows[index].raw = { ...(rows[index].raw || {}), local_attachment_name: file.name };
+        await saveRows();
+        renderRows();
+        setStatus(`Local file attached for row ${index + 1}: ${file.name}`);
+      } catch (error) {
+        console.error('[WA CRM][Attach Local] Failed to attach file', error);
+        setStatus(`Unable to attach local file: ${error.message || 'Unknown error'}`, true);
+      }
     });
     picker.click();
   }
@@ -660,6 +714,19 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     rows = Array.isArray(changes.dashboardRows.newValue) ? changes.dashboardRows.newValue : rows;
     renderRows();
   }
+});
+
+window.addEventListener('error', (event) => {
+  const message = event?.error?.message || event?.message || 'Unknown runtime error';
+  console.error('[WA CRM][Options] Unhandled error', event?.error || event);
+  setStatus(`Recovered from app error: ${message}`, true);
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event?.reason;
+  const message = reason?.message || String(reason || 'Unknown async error');
+  console.error('[WA CRM][Options] Unhandled rejection', reason);
+  setStatus(`Recovered from async error: ${message}`, true);
 });
 
 (async function init() {

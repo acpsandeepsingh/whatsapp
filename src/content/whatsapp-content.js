@@ -1488,19 +1488,30 @@ function getSafeAttachmentFileName(candidateName, fallbackExtension = 'bin') {
 
 async function downloadAttachmentAsFile(url, preferredFileName = '') {
   const sourceUrl = String(url || '').trim();
+  if (!sourceUrl) {
+    throw new Error('Attachment URL is empty');
+  }
+
   const response = await fetch(sourceUrl, { method: 'GET', credentials: 'omit' });
   if (!response.ok) {
     throw new Error(`Attachment download failed (${response.status})`);
   }
 
   const blob = await response.blob();
+  if (!blob || !blob.size) {
+    throw new Error('Attachment download returned an empty file');
+  }
   const extension = blob.type.split('/')[1] || 'bin';
   let fileName = getSafeAttachmentFileName(preferredFileName, extension);
 
   if (!sourceUrl.startsWith('data:') && !preferredFileName) {
-    const parsed = new URL(sourceUrl, window.location.href);
-    const pathname = parsed.pathname.split('/').pop() || `attachment-${Date.now()}`;
-    fileName = getSafeAttachmentFileName(pathname, extension);
+    try {
+      const parsed = new URL(sourceUrl, window.location.href);
+      const pathname = parsed.pathname.split('/').pop() || `attachment-${Date.now()}`;
+      fileName = getSafeAttachmentFileName(pathname, extension);
+    } catch (error) {
+      log('[Attachment] URL parsing failed, using fallback file name', error?.message || error);
+    }
   }
 
   return new File([blob], fileName, {
